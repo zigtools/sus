@@ -1,0 +1,1 @@
+zig build run -- C:\\Programming\\Zig\\zls\\zig-out\\bin\\zls.exe poke
