@@ -1,1 +1,9 @@
-zig build run -- C:\\Programming\\Zig\\zls\\zig-out\\bin\\zls.exe poke
+# sus
+
+zls fuzzing tooling.
+
+```bash
+git clone https://github.com/ziglang/zig repos/zig
+git clone --recurse-submodules https://github.com/zigtools/zls repos/zls
+zig build run -- repos/zls/zig-out/bin/zls[.exe] [mode]
+```
