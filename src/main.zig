@@ -35,6 +35,8 @@ pub fn main() !void {
     };
 
     var fuzzer = try Fuzzer.init(allocator, zls_path);
+    defer fuzzer.deinit();
+
     try fuzzer.initCycle();
 
     switch (fuzz_kind) {

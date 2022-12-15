@@ -30,7 +30,7 @@ pub fn init(allocator: std.mem.Allocator, zls_path: []const u8) !Fuzzer {
 }
 
 pub fn deinit(fuzzer: *Fuzzer) void {
-    fuzzer.proc.close();
+    _ = fuzzer.proc.kill() catch @panic("a");
     fuzzer.loggies.close();
 }
 
