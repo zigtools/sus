@@ -10,6 +10,8 @@ allocator: std.mem.Allocator,
 fuzzer: *Fuzzer,
 
 pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !ColdGarbo {
+    std.time.sleep(std.time.ns_per_ms * 5000);
+
     return .{
         .allocator = allocator,
         .fuzzer = fuzzer,

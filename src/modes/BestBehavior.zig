@@ -28,13 +28,13 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !BestBehavior {
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
-    var lim: usize = 0;
+    // var lim: usize = 0;
     while (try walker.next()) |entry| {
         if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
-        lim += 1;
+        // lim += 1;
 
         // TODO: Fix this
-        if (lim > 100) break;
+        // if (lim > 100) break;
 
         std.log.info("Found test {s}", .{entry.path});
 
@@ -78,6 +78,8 @@ pub const WhatToFuzz = enum {
     definition,
     references,
     signature_help,
+    hover,
+    semantic,
 };
 
 pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
@@ -89,7 +91,11 @@ pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
     var file_uri = bb.tests.items[random.intRangeLessThan(usize, 0, bb.tests.items.len)];
     var file_data = bb.test_contents.get(file_uri).?;
 
-    switch (random.enumValue(WhatToFuzz)) {
+    const wtf = random.enumValue(WhatToFuzz);
+
+    std.log.info("Fuzzing {s}...", .{@tagName(wtf)});
+
+    switch (wtf) {
         .completion => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
@@ -140,6 +146,31 @@ pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
                     .position = utils.randomPosition(random, file_data),
                 },
             });
+        },
+        .hover => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/hover",
+                .params = lsp.HoverParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(random, file_data),
+                },
+            });
+        },
+        .semantic => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .id = fuzzer.id,
+                .method = "textDocument/semanticTokens/full",
+                .params = lsp.SemanticTokensParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                },
+            });
+            fuzzer.id += 1;
         },
     }
 }
