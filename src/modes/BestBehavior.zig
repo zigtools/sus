@@ -2,6 +2,7 @@ const std = @import("std");
 const uri = @import("../uri.zig");
 const lsp = @import("../lsp.zig");
 const tres = @import("../tres.zig");
+const utils = @import("../utils.zig");
 const Fuzzer = @import("../Fuzzer.zig");
 
 const BestBehavior = @This();
@@ -74,6 +75,9 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !BestBehavior {
 
 pub const WhatToFuzz = enum {
     completion,
+    definition,
+    references,
+    signature_help,
 };
 
 pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
@@ -87,19 +91,6 @@ pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
 
     switch (random.enumValue(WhatToFuzz)) {
         .completion => {
-            const line = random.intRangeLessThan(usize, 0, std.mem.count(u8, file_data, "\n"));
-            var lines = std.mem.split(u8, file_data, "\n");
-
-            var character: usize = 0;
-
-            var index: usize = 0;
-            while (lines.next()) |line_content| : (index += 1) {
-                if (index == line) {
-                    character = if (line_content.len == 0) 0 else random.intRangeLessThan(usize, 0, line_content.len);
-                    break;
-                }
-            }
-
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
                 .method = "textDocument/completion",
@@ -107,10 +98,46 @@ pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
                     .textDocument = .{
                         .uri = file_uri,
                     },
-                    .position = .{
-                        .line = line,
-                        .character = character,
+                    .position = utils.randomPosition(random, file_data),
+                },
+            });
+        },
+        .definition => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/definition",
+                .params = lsp.DefinitionParams{
+                    .textDocument = .{
+                        .uri = file_uri,
                     },
+                    .position = utils.randomPosition(random, file_data),
+                },
+            });
+        },
+        .references => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/references",
+                .params = lsp.ReferenceParams{
+                    .context = .{
+                        .includeDeclaration = random.boolean(),
+                    },
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(random, file_data),
+                },
+            });
+        },
+        .signature_help => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/signatureHelp",
+                .params = lsp.SignatureHelpParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(random, file_data),
                 },
             });
         },

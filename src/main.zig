@@ -34,7 +34,7 @@ pub fn main() !void {
         return;
     };
 
-    var fuzzer = try Fuzzer.init(allocator, zls_path);
+    var fuzzer = try Fuzzer.create(allocator, zls_path);
     defer fuzzer.deinit();
 
     try fuzzer.initCycle();
@@ -47,7 +47,7 @@ pub fn main() !void {
                 else => @panic("bruh"),
             };
 
-            var mode = try T.init(allocator, &fuzzer);
+            var mode = try T.init(allocator, fuzzer);
 
             while (true) {
                 var arena = std.heap.ArenaAllocator.init(allocator);
