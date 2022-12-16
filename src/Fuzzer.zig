@@ -2,6 +2,7 @@ const std = @import("std");
 const lsp = @import("lsp.zig");
 const uri = @import("uri.zig");
 const tres = @import("tres.zig");
+const utils = @import("utils.zig");
 const ChildProcess = std.ChildProcess;
 
 const Fuzzer = @This();
@@ -160,4 +161,101 @@ pub fn openFile(fuzzer: *Fuzzer, path: []const u8) ![]const u8 {
     try fuzzer.open(f_uri, fuzzer.open_buf);
 
     return f_uri;
+}
+
+// Random feature fuzzing
+
+pub const WhatToFuzz = enum {
+    completion,
+    definition,
+    references,
+    signature_help,
+    hover,
+    semantic,
+};
+
+pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []const u8) !void {
+    const rand = fuzzer.random();
+    const wtf = rand.enumValue(WhatToFuzz);
+
+    std.log.info("Fuzzing {s} w/ {s}...", .{ file_uri, @tagName(wtf) });
+
+    switch (wtf) {
+        .completion => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/completion",
+                .params = lsp.CompletionParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(rand, file_data),
+                },
+            });
+        },
+        .definition => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/definition",
+                .params = lsp.DefinitionParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(rand, file_data),
+                },
+            });
+        },
+        .references => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/references",
+                .params = lsp.ReferenceParams{
+                    .context = .{
+                        .includeDeclaration = rand.boolean(),
+                    },
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(rand, file_data),
+                },
+            });
+        },
+        .signature_help => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/signatureHelp",
+                .params = lsp.SignatureHelpParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(rand, file_data),
+                },
+            });
+        },
+        .hover => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .method = "textDocument/hover",
+                .params = lsp.HoverParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                    .position = utils.randomPosition(rand, file_data),
+                },
+            });
+        },
+        .semantic => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .id = fuzzer.id,
+                .method = "textDocument/semanticTokens/full",
+                .params = lsp.SemanticTokensParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                },
+            });
+            fuzzer.id += 1;
+        },
+    }
 }

@@ -14,6 +14,9 @@ allocator: std.mem.Allocator,
 fuzzer: *Fuzzer,
 model: MarkovModel,
 
+tests: std.ArrayListUnmanaged([]const u8),
+test_contents: std.StringHashMapUnmanaged([]const u8),
+
 pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
     var itd = try std.fs.cwd().openIterableDir("repos/zig/test", .{});
     defer itd.close();
@@ -25,6 +28,9 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
 
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
+
+    var tests = std.ArrayListUnmanaged([]const u8){};
+    var test_contents = std.StringHashMapUnmanaged([]const u8){};
 
     var model = MarkovModel.init(allocator, fuzzer.random());
 
@@ -64,7 +70,9 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
         try std.fs.cwd().writeFile(pj, read_buf.items);
 
         const f_uri = try uri.fromPath(allocator, pj);
-        defer allocator.free(f_uri);
+
+        try tests.append(allocator, f_uri);
+        try test_contents.put(allocator, f_uri, try allocator.dupe(u8, read_buf.items));
 
         try fuzzer.open(f_uri, read_buf.items);
     }
@@ -73,10 +81,20 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
         .allocator = allocator,
         .fuzzer = fuzzer,
         .model = model,
+
+        .tests = tests,
+        .test_contents = test_contents,
     };
 }
 
 pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
-    _ = mm;
     _ = arena;
+
+    var fuzzer = mm.fuzzer;
+    const random = fuzzer.random();
+
+    var file_uri = mm.tests.items[random.intRangeLessThan(usize, 0, mm.tests.items.len)];
+    var file_data = mm.test_contents.get(file_uri).?;
+
+    try mm.fuzzer.fuzzFeatureRandom(file_uri, file_data);
 }

@@ -73,15 +73,6 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !BestBehavior {
     };
 }
 
-pub const WhatToFuzz = enum {
-    completion,
-    definition,
-    references,
-    signature_help,
-    hover,
-    semantic,
-};
-
 pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
     _ = arena;
 
@@ -91,86 +82,5 @@ pub fn fuzz(bb: *BestBehavior, arena: std.mem.Allocator) !void {
     var file_uri = bb.tests.items[random.intRangeLessThan(usize, 0, bb.tests.items.len)];
     var file_data = bb.test_contents.get(file_uri).?;
 
-    const wtf = random.enumValue(WhatToFuzz);
-
-    std.log.info("Fuzzing {s}...", .{@tagName(wtf)});
-
-    switch (wtf) {
-        .completion => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .method = "textDocument/completion",
-                .params = lsp.CompletionParams{
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                    .position = utils.randomPosition(random, file_data),
-                },
-            });
-        },
-        .definition => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .method = "textDocument/definition",
-                .params = lsp.DefinitionParams{
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                    .position = utils.randomPosition(random, file_data),
-                },
-            });
-        },
-        .references => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .method = "textDocument/references",
-                .params = lsp.ReferenceParams{
-                    .context = .{
-                        .includeDeclaration = random.boolean(),
-                    },
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                    .position = utils.randomPosition(random, file_data),
-                },
-            });
-        },
-        .signature_help => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .method = "textDocument/signatureHelp",
-                .params = lsp.SignatureHelpParams{
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                    .position = utils.randomPosition(random, file_data),
-                },
-            });
-        },
-        .hover => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .method = "textDocument/hover",
-                .params = lsp.HoverParams{
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                    .position = utils.randomPosition(random, file_data),
-                },
-            });
-        },
-        .semantic => {
-            try fuzzer.writeJson(.{
-                .jsonrpc = "2.0",
-                .id = fuzzer.id,
-                .method = "textDocument/semanticTokens/full",
-                .params = lsp.SemanticTokensParams{
-                    .textDocument = .{
-                        .uri = file_uri,
-                    },
-                },
-            });
-            fuzzer.id += 1;
-        },
-    }
+    try bb.fuzzer.fuzzFeatureRandom(file_uri, file_data);
 }
