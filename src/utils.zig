@@ -84,7 +84,8 @@ pub fn randomize(
 }
 
 pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp.Position {
-    const line = random.intRangeLessThan(usize, 0, std.mem.count(u8, data, "\n"));
+    const line_count = std.mem.count(u8, data, "\n");
+    const line = if (line_count == 0) 0 else random.intRangeLessThan(usize, 0, line_count);
     var lines = std.mem.split(u8, data, "\n");
 
     var character: usize = 0;

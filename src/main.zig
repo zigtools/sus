@@ -3,6 +3,7 @@ const tres = @import("tres.zig");
 const Fuzzer = @import("Fuzzer.zig");
 const ChildProcess = std.ChildProcess;
 
+const Markov = @import("modes/Markov.zig");
 const ColdGarbo = @import("modes/ColdGarbo.zig");
 const BestBehavior = @import("modes/BestBehavior.zig");
 
@@ -15,6 +16,7 @@ pub const FuzzKind = enum {
     best_behavior,
     /// Zig behavior tests w/ random by valid syntax mutations
     worst_behavior,
+    markov,
 };
 
 pub fn main() !void {
@@ -44,6 +46,7 @@ pub fn main() !void {
             const T = switch (a) {
                 .cold_garbo => ColdGarbo,
                 .best_behavior => BestBehavior,
+                .markov => Markov,
                 else => @panic("bruh"),
             };
 

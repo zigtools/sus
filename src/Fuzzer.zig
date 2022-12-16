@@ -1,5 +1,6 @@
 const std = @import("std");
 const lsp = @import("lsp.zig");
+const uri = @import("uri.zig");
 const tres = @import("tres.zig");
 const ChildProcess = std.ChildProcess;
 
@@ -7,7 +8,8 @@ const Fuzzer = @This();
 
 allocator: std.mem.Allocator,
 proc: ChildProcess,
-write_buf: std.ArrayList(u8),
+write_buf: std.ArrayListUnmanaged(u8),
+open_buf: std.ArrayListUnmanaged(u8),
 prng: std.rand.DefaultPrng,
 id: usize = 0,
 
@@ -41,7 +43,8 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     var seed: u64 = 0;
     try std.os.getrandom(std.mem.asBytes(&seed));
 
-    fuzzer.write_buf = std.ArrayList(u8).init(allocator);
+    fuzzer.write_buf = .{};
+    fuzzer.open_buf = .{};
     fuzzer.prng = std.rand.DefaultPrng.init(seed);
 
     return fuzzer;
@@ -72,7 +75,10 @@ fn readStdout(fuzzer: *Fuzzer) void {
 }
 
 pub fn deinit(fuzzer: *Fuzzer) void {
-    _ = fuzzer.proc.kill() catch @panic("a");
+    _ = fuzzer.proc.kill() catch |err| {
+        std.log.err("{s}", .{@errorName(err)});
+        @panic("abc");
+    };
 
     fuzzer.stdin.close();
     fuzzer.stderr.close();
@@ -94,7 +100,7 @@ pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
     try tres.stringify(
         data,
         .{ .emit_null_optional_fields = false },
-        fuzzer.write_buf.writer(),
+        fuzzer.write_buf.writer(fuzzer.allocator),
     );
 
     var zls_stdin = fuzzer.proc.stdin.?.writer();
@@ -123,4 +129,35 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
         .params = lsp.InitializedParams{},
     });
     std.time.sleep(std.time.ns_per_ms * 500);
+}
+
+pub fn open(fuzzer: *Fuzzer, f_uri: []const u8, data: []const u8) !void {
+    try fuzzer.writeJson(.{
+        .jsonrpc = "2.0",
+        .method = "textDocument/didOpen",
+        .params = lsp.DidOpenTextDocumentParams{ .textDocument = .{
+            .uri = f_uri,
+            .languageId = "zig",
+            .version = 0,
+            .text = data,
+        } },
+    });
+}
+
+/// Returns opened file URI; caller owns memory
+pub fn openFile(fuzzer: *Fuzzer, path: []const u8) ![]const u8 {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const size = (try file.stat()).size;
+
+    try fuzzer.open_buf.ensureTotalCapacity(fuzzer.allocator, size);
+    fuzzer.open_buf.items.len = size;
+    _ = try file.readAll(fuzzer.open_buf.items);
+
+    const f_uri = try uri.fromPath(fuzzer.allocator, path);
+
+    try fuzzer.open(f_uri, fuzzer.open_buf);
+
+    return f_uri;
 }
