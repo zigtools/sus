@@ -14,8 +14,11 @@ allocator: std.mem.Allocator,
 fuzzer: *Fuzzer,
 model: MarkovModel,
 
-tests: std.ArrayListUnmanaged([]const u8),
-test_contents: std.StringHashMapUnmanaged([]const u8),
+file: std.fs.File,
+file_uri: []const u8,
+file_buf: std.ArrayListUnmanaged(u8),
+
+cycle: usize = 0,
 
 pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
     var itd = try std.fs.cwd().openIterableDir("repos/zig/test", .{});
@@ -29,13 +32,9 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
-    var tests = std.ArrayListUnmanaged([]const u8){};
-    var test_contents = std.StringHashMapUnmanaged([]const u8){};
-
     var model = MarkovModel.init(allocator, fuzzer.random());
 
-    var read_buf = std.ArrayListUnmanaged(u8){};
-    defer read_buf.deinit(allocator);
+    var file_buf = std.ArrayListUnmanaged(u8){};
 
     while (try walker.next()) |entry| {
         if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
@@ -44,57 +43,59 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
         defer file.close();
 
         const size = (try file.stat()).size;
-        try read_buf.ensureTotalCapacity(allocator, size);
-        read_buf.items.len = size;
-        _ = try file.readAll(read_buf.items);
+        try file_buf.ensureTotalCapacity(allocator, size);
+        file_buf.items.len = size;
+        _ = try file.readAll(file_buf.items);
 
-        try model.feed(read_buf.items);
+        try model.feed(file_buf.items);
     }
 
     model.prep();
 
-    var i: usize = 0;
-    var uri_buf: [16]u8 = undefined;
+    const pj = try std.fs.path.join(allocator, &.{ cwd, "staging", "markov", "principal.zig" });
+    defer allocator.free(pj);
 
-    while (i < 500) : (i += 1) {
-        const pj = try std.fs.path.join(allocator, &.{ cwd, "staging", "markov", try std.fmt.bufPrint(&uri_buf, "{d}.zig", .{i}) });
-        defer allocator.free(pj);
+    file_buf.items.len = 0;
+    try model.gen(file_buf.writer(allocator), .{
+        .maxlen = 1024 * 32,
+    });
 
-        // (try std.fs.createFileAbsolute(pj, .{})).close();
+    var file = try std.fs.cwd().createFile(pj, .{});
+    _ = try file.writeAll(file_buf.items);
 
-        read_buf.items.len = 0;
-        try model.gen(read_buf.writer(allocator), .{
-            .maxlen = 1024 * 4,
-        });
+    const file_uri = try uri.fromPath(allocator, pj);
 
-        try std.fs.cwd().writeFile(pj, read_buf.items);
-
-        const f_uri = try uri.fromPath(allocator, pj);
-
-        try tests.append(allocator, f_uri);
-        try test_contents.put(allocator, f_uri, try allocator.dupe(u8, read_buf.items));
-
-        try fuzzer.open(f_uri, read_buf.items);
-    }
+    try fuzzer.open(file_uri, file_buf.items);
 
     return .{
         .allocator = allocator,
         .fuzzer = fuzzer,
         .model = model,
 
-        .tests = tests,
-        .test_contents = test_contents,
+        .file = file,
+        .file_uri = file_uri,
+        .file_buf = file_buf,
     };
 }
 
 pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
-    _ = arena;
+    try mm.fuzzer.fuzzFeatureRandom(arena, mm.file_uri, mm.file_buf.items);
 
-    var fuzzer = mm.fuzzer;
-    const random = fuzzer.random();
+    if (mm.cycle == 1000) {
+        std.log.info("Regenerating file...", .{});
 
-    var file_uri = mm.tests.items[random.intRangeLessThan(usize, 0, mm.tests.items.len)];
-    var file_data = mm.test_contents.get(file_uri).?;
+        mm.file_buf.items.len = 0;
+        try mm.model.gen(mm.file_buf.writer(mm.allocator), .{
+            .maxlen = 1024 * 32,
+        });
+        try mm.file.seekTo(0);
+        try mm.file.setEndPos(0);
+        _ = try mm.file.writeAll(mm.file_buf.items);
 
-    try mm.fuzzer.fuzzFeatureRandom(file_uri, file_data);
+        try mm.fuzzer.change(mm.file_uri, mm.file_buf.items);
+
+        mm.cycle = 0;
+    }
+
+    mm.cycle += 1;
 }

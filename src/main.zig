@@ -4,8 +4,8 @@ const Fuzzer = @import("Fuzzer.zig");
 const ChildProcess = std.ChildProcess;
 
 const Markov = @import("modes/Markov.zig");
-const ColdGarbo = @import("modes/ColdGarbo.zig");
-const BestBehavior = @import("modes/BestBehavior.zig");
+// const ColdGarbo = @import("modes/ColdGarbo.zig");
+// const BestBehavior = @import("modes/BestBehavior.zig");
 
 pub const FuzzKind = enum {
     /// Just absolutely random body data (valid header)
@@ -44,8 +44,8 @@ pub fn main() !void {
     switch (fuzz_kind) {
         inline else => |a| {
             const T = switch (a) {
-                .cold_garbo => ColdGarbo,
-                .best_behavior => BestBehavior,
+                // .cold_garbo => ColdGarbo,
+                // .best_behavior => BestBehavior,
                 .markov => Markov,
                 else => @panic("bruh"),
             };

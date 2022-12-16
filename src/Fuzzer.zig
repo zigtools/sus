@@ -9,6 +9,7 @@ const Fuzzer = @This();
 
 allocator: std.mem.Allocator,
 proc: ChildProcess,
+read_buf: std.ArrayListUnmanaged(u8),
 write_buf: std.ArrayListUnmanaged(u8),
 open_buf: std.ArrayListUnmanaged(u8),
 prng: std.rand.DefaultPrng,
@@ -19,7 +20,7 @@ stderr: std.fs.File,
 stdout: std.fs.File,
 
 stderr_thread: std.Thread,
-stdout_thread: std.Thread,
+// stdout_thread: std.Thread,
 
 pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     var fuzzer = try allocator.create(Fuzzer);
@@ -39,11 +40,12 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
 
     fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
-    fuzzer.stdout_thread = try std.Thread.spawn(.{}, readStdout, .{fuzzer});
+    // fuzzer.stdout_thread = try std.Thread.spawn(.{}, readStdout, .{fuzzer});
 
     var seed: u64 = 0;
     try std.os.getrandom(std.mem.asBytes(&seed));
 
+    fuzzer.read_buf = .{};
     fuzzer.write_buf = .{};
     fuzzer.open_buf = .{};
     fuzzer.prng = std.rand.DefaultPrng.init(seed);
@@ -63,16 +65,61 @@ fn readStderr(fuzzer: *Fuzzer) void {
     std.log.err("stderr failure", .{});
 }
 
-fn readStdout(fuzzer: *Fuzzer) void {
-    var lf = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
+// fn readStdout(fuzzer: *Fuzzer) void {
+//     var lf = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
 
-    while (true) {
-        var stdout = fuzzer.proc.stdout orelse break;
-        lf.pump(stdout.reader(), fuzzer.stdout.writer()) catch break;
-        // fuzzer.stdout.writer().writeByte(stdout.reader().readByte() catch break) catch break;
+//     while (true) {
+//         var stdout = fuzzer.proc.stdout orelse break;
+//         lf.pump(stdout.reader(), fuzzer.stdout.writer()) catch break;
+//         // fuzzer.stdout.writer().writeByte(stdout.reader().readByte() catch break) catch break;
+//     }
+
+//     std.log.err("stdout failure", .{});
+// }
+
+const RequestHeader = struct {
+    content_length: usize,
+
+    /// null implies "application/vscode-jsonrpc; charset=utf-8"
+    content_type: ?[]const u8,
+
+    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        if (self.content_type) |ct| allocator.free(ct);
     }
+};
 
-    std.log.err("stdout failure", .{});
+pub fn readRequestHeader(fuzzer: *Fuzzer) !RequestHeader {
+    const allocator = fuzzer.allocator;
+    const reader = fuzzer.proc.stdout.?.reader();
+
+    var r = RequestHeader{
+        .content_length = undefined,
+        .content_type = null,
+    };
+    errdefer r.deinit(allocator);
+
+    var has_content_length = false;
+    while (true) {
+        const header = try reader.readUntilDelimiterAlloc(allocator, '\n', 0x100);
+        defer allocator.free(header);
+        if (header.len == 0 or header[header.len - 1] != '\r') return error.MissingCarriageReturn;
+        if (header.len == 1) break;
+
+        const header_name = header[0 .. std.mem.indexOf(u8, header, ": ") orelse return error.MissingColon];
+        const header_value = header[header_name.len + 2 .. header.len - 1];
+        if (std.mem.eql(u8, header_name, "Content-Length")) {
+            if (header_value.len == 0) return error.MissingHeaderValue;
+            r.content_length = std.fmt.parseInt(usize, header_value, 10) catch return error.InvalidContentLength;
+            has_content_length = true;
+        } else if (std.mem.eql(u8, header_name, "Content-Type")) {
+            r.content_type = try allocator.dupe(u8, header_value);
+        } else {
+            return error.UnknownHeader;
+        }
+    }
+    if (!has_content_length) return error.MissingContentLength;
+
+    return r;
 }
 
 pub fn deinit(fuzzer: *Fuzzer) void {
@@ -86,7 +133,7 @@ pub fn deinit(fuzzer: *Fuzzer) void {
     fuzzer.stdout.close();
 
     fuzzer.stderr_thread.join();
-    fuzzer.stdout_thread.join();
+    // fuzzer.stdout_thread.join();
 
     fuzzer.allocator.destroy(fuzzer);
 }
@@ -112,7 +159,36 @@ pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
     try fuzzer.stdin.writeAll("\n\n");
 }
 
+pub fn readToBuffer(fuzzer: *Fuzzer) !void {
+    const header = try fuzzer.readRequestHeader();
+    try fuzzer.read_buf.ensureTotalCapacity(fuzzer.allocator, header.content_length);
+    fuzzer.read_buf.items.len = header.content_length;
+    _ = try fuzzer.proc.stdout.?.reader().readAll(fuzzer.read_buf.items);
+
+    _ = try fuzzer.stdout.writeAll(fuzzer.read_buf.items);
+    _ = try fuzzer.stdout.writeAll("\n");
+}
+
+pub fn readAndPrint(fuzzer: *Fuzzer) !void {
+    try fuzzer.readToBuffer();
+    std.log.info("{s}", .{fuzzer.read_buf.items});
+}
+pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
+    while (true) {
+        try fuzzer.readToBuffer();
+
+        var tree = std.json.Parser.init(arena, true);
+        const vt = try tree.parse(fuzzer.read_buf.items);
+
+        if (vt.root.Object.get("method") != null) continue;
+        if (vt.root.Object.get("id") != null) break;
+    }
+}
+
 pub fn initCycle(fuzzer: *Fuzzer) !void {
+    var arena = std.heap.ArenaAllocator.init(fuzzer.allocator);
+    defer arena.deinit();
+
     try fuzzer.writeJson(.{
         .jsonrpc = "2.0",
         .id = fuzzer.id,
@@ -121,18 +197,21 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
             .capabilities = .{},
         },
     });
-    fuzzer.id += 1;
-    std.time.sleep(std.time.ns_per_ms * 500);
+    fuzzer.id +%= 1;
+    try fuzzer.readUntilLastResponse(arena.allocator());
 
     try fuzzer.writeJson(.{
         .jsonrpc = "2.0",
         .method = "initialized",
         .params = lsp.InitializedParams{},
     });
-    std.time.sleep(std.time.ns_per_ms * 500);
 }
 
-pub fn open(fuzzer: *Fuzzer, f_uri: []const u8, data: []const u8) !void {
+pub fn open(
+    fuzzer: *Fuzzer,
+    f_uri: []const u8,
+    data: []const u8,
+) !void {
     try fuzzer.writeJson(.{
         .jsonrpc = "2.0",
         .method = "textDocument/didOpen",
@@ -142,6 +221,26 @@ pub fn open(fuzzer: *Fuzzer, f_uri: []const u8, data: []const u8) !void {
             .version = 0,
             .text = data,
         } },
+    });
+}
+
+pub fn change(
+    fuzzer: *Fuzzer,
+    f_uri: []const u8,
+    data: []const u8,
+) !void {
+    try fuzzer.writeJson(.{
+        .jsonrpc = "2.0",
+        .method = "textDocument/didChange",
+        .params = lsp.DidChangeTextDocumentParams{
+            .textDocument = .{
+                .uri = f_uri,
+                .version = 0,
+            },
+            .contentChanges = &[1]lsp.TextDocumentContentChangeEvent{.{
+                .literal_1 = .{ .text = data },
+            }},
+        },
     });
 }
 
@@ -172,9 +271,15 @@ pub const WhatToFuzz = enum {
     signature_help,
     hover,
     semantic,
+    document_symbol,
 };
 
-pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []const u8) !void {
+pub fn fuzzFeatureRandom(
+    fuzzer: *Fuzzer,
+    arena: std.mem.Allocator,
+    file_uri: []const u8,
+    file_data: []const u8,
+) !void {
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
@@ -184,6 +289,7 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
         .completion => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
+                .id = fuzzer.id,
                 .method = "textDocument/completion",
                 .params = lsp.CompletionParams{
                     .textDocument = .{
@@ -192,10 +298,14 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     .position = utils.randomPosition(rand, file_data),
                 },
             });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
         .definition => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
+                .id = fuzzer.id,
                 .method = "textDocument/definition",
                 .params = lsp.DefinitionParams{
                     .textDocument = .{
@@ -204,10 +314,14 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     .position = utils.randomPosition(rand, file_data),
                 },
             });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
         .references => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
+                .id = fuzzer.id,
                 .method = "textDocument/references",
                 .params = lsp.ReferenceParams{
                     .context = .{
@@ -219,10 +333,14 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     .position = utils.randomPosition(rand, file_data),
                 },
             });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
         .signature_help => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
+                .id = fuzzer.id,
                 .method = "textDocument/signatureHelp",
                 .params = lsp.SignatureHelpParams{
                     .textDocument = .{
@@ -231,10 +349,14 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     .position = utils.randomPosition(rand, file_data),
                 },
             });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
         .hover => {
             try fuzzer.writeJson(.{
                 .jsonrpc = "2.0",
+                .id = fuzzer.id,
                 .method = "textDocument/hover",
                 .params = lsp.HoverParams{
                     .textDocument = .{
@@ -243,6 +365,9 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     .position = utils.randomPosition(rand, file_data),
                 },
             });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
         .semantic => {
             try fuzzer.writeJson(.{
@@ -255,7 +380,24 @@ pub fn fuzzFeatureRandom(fuzzer: *Fuzzer, file_uri: []const u8, file_data: []con
                     },
                 },
             });
-            fuzzer.id += 1;
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
+        },
+        .document_symbol => {
+            try fuzzer.writeJson(.{
+                .jsonrpc = "2.0",
+                .id = fuzzer.id,
+                .method = "textDocument/documentSymbol",
+                .params = lsp.DocumentSymbolParams{
+                    .textDocument = .{
+                        .uri = file_uri,
+                    },
+                },
+            });
+
+            fuzzer.id +%= 1;
+            try fuzzer.readUntilLastResponse(arena);
         },
     }
 }
