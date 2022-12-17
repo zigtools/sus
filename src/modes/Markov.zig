@@ -20,28 +20,25 @@ file_buf: std.ArrayListUnmanaged(u8),
 
 cycle: usize = 0,
 
-pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
-    var itd = try std.fs.cwd().openIterableDir("repos/zig/test", .{});
+pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8) !Markov {
+    var itd = try std.fs.cwd().openIterableDir(input_dir, .{});
     defer itd.close();
 
     var walker = try itd.walk(allocator);
     defer walker.deinit();
-
-    // TODO: Arena
 
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
     var model = MarkovModel.init(allocator, fuzzer.random());
 
-    var file_buf = std.ArrayListUnmanaged(u8){};
+    var file_buf = try std.ArrayListUnmanaged(u8).initCapacity(allocator, 1024 * 1024);
 
     while (try walker.next()) |entry| {
         if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
-
         const size = (try file.stat()).size;
         try file_buf.ensureTotalCapacity(allocator, size);
         file_buf.items.len = size;

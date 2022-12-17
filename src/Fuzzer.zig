@@ -35,6 +35,7 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
 
     try fuzzer.proc.spawn();
 
+    try std.fs.cwd().makePath("logs");
     fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
     fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
     fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
@@ -245,22 +246,25 @@ pub fn change(
 }
 
 /// Returns opened file URI; caller owns memory
-pub fn openFile(fuzzer: *Fuzzer, path: []const u8) ![]const u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+// not used anywhere
+// pub fn openFile(fuzzer: *Fuzzer, path: []const u8) ![]const u8 {
+//     // std.debug.print("path {s}\n", .{path});
+//     // if (true) @panic("asdf");
+//     var file = try std.fs.cwd().openFile(path, .{});
+//     defer file.close();
 
-    const size = (try file.stat()).size;
+//     const size = (try file.stat()).size;
 
-    try fuzzer.open_buf.ensureTotalCapacity(fuzzer.allocator, size);
-    fuzzer.open_buf.items.len = size;
-    _ = try file.readAll(fuzzer.open_buf.items);
+//     try fuzzer.open_buf.ensureTotalCapacity(fuzzer.allocator, size);
+//     fuzzer.open_buf.items.len = size;
+//     _ = try file.readAll(fuzzer.open_buf.items);
 
-    const f_uri = try uri.fromPath(fuzzer.allocator, path);
+//     const f_uri = try uri.fromPath(fuzzer.allocator, path);
 
-    try fuzzer.open(f_uri, fuzzer.open_buf);
+//     try fuzzer.open(f_uri, fuzzer.open_buf);
 
-    return f_uri;
-}
+//     return f_uri;
+// }
 
 // Random feature fuzzing
 

@@ -25,8 +25,8 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len != 3) {
-        std.log.err("buzz <zls executable path> <fuzz kind: cold_garbo>", .{});
+    if (std.mem.indexOfScalar(usize, &.{ 3, 4 }, args.len) == null) {
+        std.log.err("buzz <zls executable path> <fuzz kind: cold_garbo> <?markov input dir>", .{});
         return;
     }
 
@@ -35,6 +35,13 @@ pub fn main() !void {
         std.log.err("Invalid fuzz kind!", .{});
         return;
     };
+    var markov_input_dir: []const u8 = "sus directory name";
+    if (fuzz_kind == .markov) {
+        if (args.len != 4) {
+            std.log.err("Missing markov input dir!", .{});
+            return;
+        } else markov_input_dir = args[3];
+    }
 
     var fuzzer = try Fuzzer.create(allocator, zls_path);
     defer fuzzer.deinit();
@@ -50,7 +57,7 @@ pub fn main() !void {
                 else => @panic("bruh"),
             };
 
-            var mode = try T.init(allocator, fuzzer);
+            var mode = try T.init(allocator, fuzzer, markov_input_dir);
 
             while (true) {
                 var arena = std.heap.ArenaAllocator.init(allocator);
