@@ -9,5 +9,5 @@ rm repos/zig/build.zig
 Get-ChildItem -Path "repos/zig/test" build.zig -Recurse | Remove-Item
 zig build run -- repos/zls/zig-out/bin/zls[.exe] [mode]
 # example with 'markov input dir' arg
-zig build run -- ../zls/zig-out/bin/zls markov ../zig/test/behavior
+zig build run -Dblock-len=8 -- repos/zls/zig-out/bin/zls markov repos/zig/test/
 ```

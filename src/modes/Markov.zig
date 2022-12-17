@@ -5,10 +5,11 @@ const tres = @import("../tres.zig");
 const utils = @import("../utils.zig");
 const markov = @import("../markov.zig");
 const Fuzzer = @import("../Fuzzer.zig");
+const build_options = @import("build_options");
 
 const Markov = @This();
 
-const MarkovModel = markov.Model(8, false);
+const MarkovModel = markov.Model(build_options.block_len, false);
 
 allocator: std.mem.Allocator,
 fuzzer: *Fuzzer,

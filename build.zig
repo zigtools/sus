@@ -32,4 +32,15 @@ pub fn build(b: *std.build.Builder) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&exe_tests.step);
+
+    const block_len = b.option(
+        u8,
+        "block-len",
+        "how many bytes to consider when predicting the next character.  " ++
+            "defaults to 8.  " ++
+            "note: this may affect performance.",
+    ) orelse 8;
+    const options = b.addOptions();
+    options.addOption(u8, "block_len", block_len);
+    exe.addOptions("build_options", options);
 }
