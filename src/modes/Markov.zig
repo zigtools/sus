@@ -78,6 +78,17 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
     };
 }
 
+pub fn openPrincipal(mm: *Markov) !void {
+    mm.file_buf.items.len = 0;
+    try mm.model.gen(mm.file_buf.writer(mm.allocator), .{
+        .maxlen = 1024 * 32,
+    });
+    try mm.file.seekTo(0);
+    try mm.file.setEndPos(0);
+    _ = try mm.file.writeAll(mm.file_buf.items);
+    try mm.fuzzer.open(mm.file_uri, mm.file_buf.items);
+}
+
 pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
     try mm.fuzzer.fuzzFeatureRandom(arena, mm.file_uri, mm.file_buf.items);
 

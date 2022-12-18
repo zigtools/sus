@@ -27,6 +27,7 @@ stderr_thread: std.Thread,
 pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     var fuzzer = try allocator.create(Fuzzer);
 
+    fuzzer.id = 0;
     fuzzer.allocator = allocator;
 
     fuzzer.proc = std.ChildProcess.init(&.{ zls_path, "--enable-debug-log" }, allocator);
@@ -54,6 +55,37 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     fuzzer.prng = std.rand.DefaultPrng.init(seed);
 
     return fuzzer;
+}
+
+pub fn kill(fuzzer: *Fuzzer) void {
+    _ = fuzzer.proc.wait() catch |err| {
+        std.log.err("{s}", .{@errorName(err)});
+    };
+
+    fuzzer.stdin.close();
+    fuzzer.stderr.close();
+    fuzzer.stdout.close();
+
+    fuzzer.stderr_thread.join();
+}
+
+pub fn reset(fuzzer: *Fuzzer, zls_path: []const u8) !void {
+    fuzzer.id = 0;
+
+    fuzzer.proc = std.ChildProcess.init(&.{ zls_path, "--enable-debug-log" }, fuzzer.allocator);
+
+    fuzzer.proc.stdin_behavior = .Pipe;
+    fuzzer.proc.stderr_behavior = .Pipe;
+    fuzzer.proc.stdout_behavior = .Pipe;
+
+    try fuzzer.proc.spawn();
+
+    try std.fs.cwd().makePath("logs");
+    fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
+    fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
+    fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
+
+    fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
 }
 
 pub fn deinit(fuzzer: *Fuzzer) void {

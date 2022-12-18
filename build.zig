@@ -12,7 +12,6 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     const exe = b.addExecutable("buzz", "src/main.zig");
-    exe.linkLibC();
     // exe.use_stage1 = true;
     exe.setTarget(target);
     exe.setBuildMode(mode);
