@@ -9,7 +9,13 @@
 <body>
     <ul>
         <% for (const log of logs) { %>
-            <li><a href="/log/<%= log %>"><%= log %></a></li>
+            <li><%= log.name %> (<%= log.date.toString() %>)
+                <ul>
+                    <li><a href="/log/<%= log.name %>/stderr">stderr</a></li>
+                    <li><a href="/log/<%= log.name %>/stdin">stdin</a></li>
+                    <li><a href="/log/<%= log.name %>/stdout">stdout</a></li>
+                </ul>
+            </li>
         <% } %>
     </ul>
 </body>
