@@ -9,9 +9,11 @@ const Fuzzer = @This();
 
 allocator: std.mem.Allocator,
 proc: ChildProcess,
+
 read_buf: std.ArrayListUnmanaged(u8),
 write_buf: std.ArrayListUnmanaged(u8),
 open_buf: std.ArrayListUnmanaged(u8),
+
 prng: std.rand.DefaultPrng,
 id: usize = 0,
 
@@ -31,6 +33,7 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
 
     fuzzer.proc.stdin_behavior = .Pipe;
     fuzzer.proc.stderr_behavior = .Pipe;
+
     fuzzer.proc.stdout_behavior = .Pipe;
 
     try fuzzer.proc.spawn();
@@ -41,7 +44,6 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
 
     fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
-    // fuzzer.stdout_thread = try std.Thread.spawn(.{}, readStdout, .{fuzzer});
 
     var seed: u64 = 0;
     try std.os.getrandom(std.mem.asBytes(&seed));
@@ -54,39 +56,37 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     return fuzzer;
 }
 
+pub fn deinit(fuzzer: *Fuzzer) void {
+    _ = fuzzer.proc.wait() catch |err| {
+        std.log.err("{s}", .{@errorName(err)});
+    };
+
+    fuzzer.read_buf.deinit(fuzzer.allocator);
+    fuzzer.write_buf.deinit(fuzzer.allocator);
+    fuzzer.open_buf.deinit(fuzzer.allocator);
+
+    fuzzer.stdin.close();
+    fuzzer.stderr.close();
+    fuzzer.stdout.close();
+
+    fuzzer.stderr_thread.join();
+
+    fuzzer.allocator.destroy(fuzzer);
+}
+
 fn readStderr(fuzzer: *Fuzzer) void {
     var lf = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
 
     while (true) {
         var stderr = fuzzer.proc.stderr orelse break;
         lf.pump(stderr.reader(), fuzzer.stderr.writer()) catch break;
-        // fuzzer.stderr.writer().writeByte(stderr.reader().readByte() catch return) catch return;
     }
 
     std.log.err("stderr failure", .{});
 }
 
-// fn readStdout(fuzzer: *Fuzzer) void {
-//     var lf = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
-
-//     while (true) {
-//         var stdout = fuzzer.proc.stdout orelse break;
-//         lf.pump(stdout.reader(), fuzzer.stdout.writer()) catch break;
-//         // fuzzer.stdout.writer().writeByte(stdout.reader().readByte() catch break) catch break;
-//     }
-
-//     std.log.err("stdout failure", .{});
-// }
-
 const RequestHeader = struct {
     content_length: usize,
-
-    /// null implies "application/vscode-jsonrpc; charset=utf-8"
-    content_type: ?[]const u8,
-
-    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
-        if (self.content_type) |ct| allocator.free(ct);
-    }
 };
 
 pub fn readRequestHeader(fuzzer: *Fuzzer) !RequestHeader {
@@ -95,48 +95,30 @@ pub fn readRequestHeader(fuzzer: *Fuzzer) !RequestHeader {
 
     var r = RequestHeader{
         .content_length = undefined,
-        .content_type = null,
     };
-    errdefer r.deinit(allocator);
 
     var has_content_length = false;
     while (true) {
         const header = try reader.readUntilDelimiterAlloc(allocator, '\n', 0x100);
         defer allocator.free(header);
+
         if (header.len == 0 or header[header.len - 1] != '\r') return error.MissingCarriageReturn;
         if (header.len == 1) break;
 
         const header_name = header[0 .. std.mem.indexOf(u8, header, ": ") orelse return error.MissingColon];
         const header_value = header[header_name.len + 2 .. header.len - 1];
+
         if (std.mem.eql(u8, header_name, "Content-Length")) {
             if (header_value.len == 0) return error.MissingHeaderValue;
             r.content_length = std.fmt.parseInt(usize, header_value, 10) catch return error.InvalidContentLength;
             has_content_length = true;
-        } else if (std.mem.eql(u8, header_name, "Content-Type")) {
-            r.content_type = try allocator.dupe(u8, header_value);
-        } else {
+        } else if (std.mem.eql(u8, header_name, "Content-Type")) {} else {
             return error.UnknownHeader;
         }
     }
     if (!has_content_length) return error.MissingContentLength;
 
     return r;
-}
-
-pub fn deinit(fuzzer: *Fuzzer) void {
-    _ = fuzzer.proc.kill() catch |err| {
-        std.log.err("{s}", .{@errorName(err)});
-        @panic("abc");
-    };
-
-    fuzzer.stdin.close();
-    fuzzer.stderr.close();
-    fuzzer.stdout.close();
-
-    fuzzer.stderr_thread.join();
-    // fuzzer.stdout_thread.join();
-
-    fuzzer.allocator.destroy(fuzzer);
 }
 
 pub fn random(fuzzer: *Fuzzer) std.rand.Random {
@@ -174,6 +156,7 @@ pub fn readAndPrint(fuzzer: *Fuzzer) !void {
     try fuzzer.readToBuffer();
     std.log.info("{s}", .{fuzzer.read_buf.items});
 }
+
 pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
     while (true) {
         try fuzzer.readToBuffer();
@@ -287,7 +270,7 @@ pub fn fuzzFeatureRandom(
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
-    std.log.info("Fuzzing {s} w/ {s}...", .{ file_uri, @tagName(wtf) });
+    // std.log.info("Fuzzing {s} w/ {s}...", .{ file_uri, @tagName(wtf) });
 
     switch (wtf) {
         .completion => {

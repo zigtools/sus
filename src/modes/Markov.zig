@@ -40,9 +40,11 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
+
         const size = (try file.stat()).size;
         try file_buf.ensureTotalCapacity(allocator, size);
         file_buf.items.len = size;
+
         _ = try file.readAll(file_buf.items);
 
         try model.feed(file_buf.items);
@@ -55,7 +57,7 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
 
     file_buf.items.len = 0;
     try model.gen(file_buf.writer(allocator), .{
-        .maxlen = 1024 * 32,
+        .maxlen = 1024,
     });
 
     var file = try std.fs.cwd().createFile(pj, .{});
@@ -79,7 +81,7 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
 pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
     try mm.fuzzer.fuzzFeatureRandom(arena, mm.file_uri, mm.file_buf.items);
 
-    if (mm.cycle == 1000) {
+    if (mm.cycle == 25) {
         std.log.info("Regenerating file...", .{});
 
         mm.file_buf.items.len = 0;
@@ -96,4 +98,11 @@ pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
     }
 
     mm.cycle += 1;
+}
+
+pub fn deinit(mm: *Markov) void {
+    mm.file.close();
+    mm.file_buf.deinit(mm.allocator);
+    mm.model.deinit(mm.allocator);
+    mm.allocator.free(mm.file_uri);
 }

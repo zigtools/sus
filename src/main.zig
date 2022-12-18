@@ -1,70 +1,46 @@
 const std = @import("std");
 const tres = @import("tres.zig");
+const builtin = @import("builtin");
 const Fuzzer = @import("Fuzzer.zig");
 const ChildProcess = std.ChildProcess;
 
 const Markov = @import("modes/Markov.zig");
-// const ColdGarbo = @import("modes/ColdGarbo.zig");
-// const BestBehavior = @import("modes/BestBehavior.zig");
-
-pub const FuzzKind = enum {
-    /// Just absolutely random body data (valid header)
-    hot_garbo,
-    /// Absolutely random JSON-RPC LSP data
-    cold_garbo,
-    /// Zig behavior tests
-    best_behavior,
-    /// Zig behavior tests w/ random by valid syntax mutations
-    worst_behavior,
-    markov,
-};
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // var allocator = gpa.allocator();
+    // defer _ = gpa.deinit();
+    var allocator = std.heap.c_allocator;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    if (std.mem.indexOfScalar(usize, &.{ 3, 4 }, args.len) == null) {
-        std.log.err("buzz <zls executable path> <fuzz kind: cold_garbo> <?markov input dir>", .{});
-        return;
-    }
-
-    const zls_path = args[1];
-    const fuzz_kind = std.meta.stringToEnum(FuzzKind, args[2]) orelse {
-        std.log.err("Invalid fuzz kind!", .{});
-        return;
-    };
-    var markov_input_dir: []const u8 = "sus directory name";
-    if (fuzz_kind == .markov) {
-        if (args.len != 4) {
-            std.log.err("Missing markov input dir!", .{});
-            return;
-        } else markov_input_dir = args[3];
-    }
+    // const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
+    const zls_path = "repos/old_zlses/zls.exe";
+    const markov_input_dir = "repos/zig/lib/std";
+    // const markov_input_dir = "repos/zig/test/behavior";
 
     var fuzzer = try Fuzzer.create(allocator, zls_path);
-    defer fuzzer.deinit();
-
     try fuzzer.initCycle();
+    var markov = try Markov.init(allocator, fuzzer, markov_input_dir);
 
-    switch (fuzz_kind) {
-        inline else => |a| {
-            const T = switch (a) {
-                // .cold_garbo => ColdGarbo,
-                // .best_behavior => BestBehavior,
-                .markov => Markov,
-                else => @panic("bruh"),
-            };
+    // var saved_logs = try std.fs.cwd().makeOpenPath("saved_logs", .{});
+    // defer saved_logs.close();
+    try std.fs.cwd().makePath("saved_logs");
 
-            var mode = try T.init(allocator, fuzzer, markov_input_dir);
+    while (true) {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
 
-            while (true) {
-                var arena = std.heap.ArenaAllocator.init(allocator);
-                defer arena.deinit();
+        markov.fuzz(arena.allocator()) catch {
+            std.log.info("Restarting fuzzer...", .{});
+            fuzzer.deinit();
+            markov.cycle = 0;
 
-                try mode.fuzz(arena.allocator());
-            }
-        },
+            var buf: [512]u8 = undefined;
+            const sub = try std.fmt.bufPrint(&buf, "saved_logs/logs-{d}", .{std.time.milliTimestamp()});
+            try std.fs.cwd().rename("logs", sub);
+
+            fuzzer = try Fuzzer.create(allocator, zls_path);
+            try fuzzer.initCycle();
+            markov.fuzzer = fuzzer;
+        };
     }
 }

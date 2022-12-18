@@ -1,4 +1,5 @@
 zig-*
 /logs
+/saved_logs
 /repos
 /staging/markov/*.zig
