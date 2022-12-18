@@ -3,3 +3,4 @@ zig-*
 /saved_logs
 /repos
 /staging/markov/*.zig
+node_modules

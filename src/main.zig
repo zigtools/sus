@@ -9,8 +9,7 @@ const Markov = @import("modes/Markov.zig");
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
-    // const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
-    const zls_path = "repos/old_zlses/zls.exe";
+    const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
     const markov_input_dir = "repos/zig/lib/std";
 
     var fuzzer = try Fuzzer.create(allocator, zls_path);
