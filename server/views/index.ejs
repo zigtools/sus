@@ -1,22 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>sus</title>
+    <%- include("includes/head.ejs") %>
 </head>
 <body>
-    <ul>
-        <% for (const log of logs) { %>
-            <li><%= log.name %> (<%= log.date.toString() %>)
-                <ul>
-                    <li><a href="/log/<%= log.name %>/stderr">stderr</a></li>
-                    <li><a href="/log/<%= log.name %>/stdin">stdin</a></li>
-                    <li><a href="/log/<%= log.name %>/stdout">stdout</a></li>
-                </ul>
-            </li>
-        <% } %>
-    </ul>
+    <main>
+        <h1>Logs</h1>
+
+        <%- include("includes/listing.ejs", {logs}) %>
+    </main>
+
+    <%- include("includes/footer.ejs") %>
 </body>
 </html>

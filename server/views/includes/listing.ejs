@@ -1,0 +1,12 @@
+<div class="log-listing">
+    <% for (const log of logs) { %>
+        <div><time><%= +log.date %></time>
+            <div class="log-listing-links">
+                <a href="/log/<%= log.name %>">Info</a>
+                <a href="/log/<%= log.name %>/stderr">Error</a>
+                <a href="/log/<%= log.name %>/stdin">Input</a>
+                <a href="/log/<%= log.name %>/stdout">Output</a>
+            </div>
+        </div>
+    <% } %>
+</div>

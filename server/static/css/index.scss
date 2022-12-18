@@ -1,0 +1,40 @@
+html, body {
+    margin: 0;
+    padding: 0;
+
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+main {
+    padding: 20px;
+}
+
+h1 {
+    font-family: "Arial Narrow";
+    font-size: 32pt;
+    font-weight: 700;
+    font-style: italic;
+    letter-spacing: -2px;
+}
+
+a {
+    color: black;
+}
+
+.log-listing {
+    time {
+        font-weight: 700;
+    }
+
+    &-links {
+        &>a {
+            display: inline-block;
+            
+            margin-left: 20px;
+        }
+    }
+
+    &>* {
+        margin-bottom: 20px;
+    }
+}
