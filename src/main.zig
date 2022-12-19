@@ -6,10 +6,24 @@ const ChildProcess = std.ChildProcess;
 
 const Markov = @import("modes/Markov.zig");
 
+pub const log_level = std.log.Level.info;
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (@enumToInt(level) > @enumToInt(log_level)) return;
+
+    const level_txt = comptime level.asText();
+
+    std.debug.print("{d} | {s}: ({s}): ", .{ std.time.milliTimestamp(), level_txt, @tagName(scope) });
+    std.debug.print(format ++ "\n", args);
+}
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
-    // var allocator = std.heap.page_allocator;
+    var allocator = std.heap.page_allocator;
 
     const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
     const markov_input_dir = "repos/zig/lib/std";

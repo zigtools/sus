@@ -13,6 +13,8 @@ const MarkovModel = markov.Model(build_options.block_len, false);
 
 allocator: std.mem.Allocator,
 fuzzer: *Fuzzer,
+
+model_allocator: std.heap.ArenaAllocator,
 model: MarkovModel,
 
 file: std.fs.File,
@@ -31,7 +33,8 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
-    var model = MarkovModel.init(allocator, fuzzer.random());
+    var model_allocator = std.heap.ArenaAllocator.init(allocator);
+    var model = MarkovModel.init(model_allocator.allocator(), fuzzer.random());
 
     var file_buf = try std.ArrayListUnmanaged(u8).initCapacity(allocator, 1024 * 1024);
 
@@ -70,6 +73,8 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
     return .{
         .allocator = allocator,
         .fuzzer = fuzzer,
+
+        .model_allocator = model_allocator,
         .model = model,
 
         .file = file,
@@ -114,6 +119,6 @@ pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
 pub fn deinit(mm: *Markov) void {
     mm.file.close();
     mm.file_buf.deinit(mm.allocator);
-    mm.model.deinit(mm.allocator);
     mm.allocator.free(mm.file_uri);
+    mm.model_allocator.deinit();
 }
