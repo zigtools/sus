@@ -8,49 +8,50 @@ app.use(express.static("static"));
 
 const savedLogsPath = path.join(__dirname, "../..", "saved_logs");
 
-const panicRegex = /thread \d*? panic: ((?:.|\n)*$)/gm;
+const panicRegex = /panic:(?:[^]*\n?)*/gm;
+const crashLocationRegex = /(.*.zig):(\d*):(\d*)/;
 
-function logInfo(log) {
-    return {
-        name: log,
-        date: new Date(+log.split("-")[1]),
-    };
-}
+let logData = [];
+let logGroups = [];
+let logMap = new Map();
 
-function getLogs() {
-    return fs.readdirSync(savedLogsPath).map(logInfo).sort((a, b) => b.date - a.date);
-}
+function populateStderrData(log) {
+    const stderr = fs.readFileSync(path.join(savedLogsPath, log.name, "stderr.log")).toString();
 
-let relations = [];
+    let match = stderr.match(panicRegex);
+    if (!match) {
+        log.summary = "No summary available"
+        return;
+    }
 
-function calculateRelations() {
-    const logs = getLogs();
+    const lines = match[0].split("\n");
+    const cl = lines[1].match(crashLocationRegex);
 
-    logScramble: for (const log of logs) {
-        let err = fs.readFileSync(path.join(savedLogsPath, log.name, "stderr.log")).toString();
-        err = err.match(panicRegex)[0].split("\n").slice(1).join("\n");
-
-        for (const relation of relations) {
-            if (relation[0].err == err) {
-                relation.push({
-                    log
-                });
-                continue logScramble;
-            }
-        }
-
-        relations.push([{
-            log,
-            err,
-        }]);
+    if (cl) {
+        log.summary = `In ${path.relative(path.join(__dirname, "../.."), cl[1])}:${cl[2]}:${cl[3]}; \`${lines[2].trim()}\``;
+    } else {
+        log.summary = "No summary available"
+        return;
     }
 }
 
-calculateRelations();
+function updateLogData() {
+    let ld = fs.readdirSync(savedLogsPath).map(log => ({
+        name: log,
+        date: new Date(+log.split("-")[1]),
+    })).sort((a, b) => b.date - a.date);
+
+    ld.map(populateStderrData);
+    logData = ld;
+
+    ld.map((_, i) => logMap.set(_.name, i));
+}
+
+updateLogData();
 
 app.get("/", (req, res) => {
     res.render("index.ejs", {
-        logs: getLogs(),
+        logs: logData,
     });
 });
 

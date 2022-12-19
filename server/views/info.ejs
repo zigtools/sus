@@ -1,24 +1,18 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <%- include("includes/head.ejs") %>
-</head>
-<body>
-    <main>
-        <a href="/">&larr; Back</a>
+<%- include("includes/header.ejs") %>
 
-        <h1><time><%= +log.date %></time></h1>
+<main>
+    <a href="/">&larr; Back</a>
 
-        <p>The error is likely the following:</p>
-        <pre><code><%= err %></code></pre>
-        
-        <h2>The following occurrences are likely related:</h2>
+    <h1><time><%= +log.date %></time></h1>
 
-        <ul>
-            <%- include("includes/listing.ejs", {logs: related.map(_ => _.log).filter(_ => _.name != log.name)}) %>
-        </ul>
-    </main>
+    <p>The error is likely the following:</p>
+    <pre><code><%= err %></code></pre>
+    
+    <h2>The following occurrences are likely related:</h2>
 
-    <%- include("includes/footer.ejs") %>
-</body>
-</html>
+    <ul>
+        <%- include("includes/listing.ejs", {logs: related.map(_ => _.log).filter(_ => _.name != log.name)}) %>
+    </ul>
+</main>
+
+<%- include("includes/footer.ejs") %>

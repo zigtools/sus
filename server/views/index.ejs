@@ -1,15 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <%- include("includes/head.ejs") %>
-</head>
-<body>
-    <main>
-        <h1>Logs</h1>
+<%- include("includes/header.ejs") %>
 
-        <%- include("includes/listing.ejs", {logs}) %>
-    </main>
+<main>
+    <h1>Fuzzing Output</h1>
 
-    <%- include("includes/footer.ejs") %>
-</body>
-</html>
+    <%- include("includes/listing.ejs", {logs}) %>
+</main>
+
+<%- include("includes/footer.ejs") %>
