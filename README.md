@@ -13,6 +13,7 @@ zig build run -Dblock-len=8 -- repos/zls/zig-out/bin/zls markov repos/zig/test/
 ```
 
 # usage
+
 ```console
  usage: zig build run <?block len> -- <zls path> <mode> <mode specific arguments>
 
@@ -31,6 +32,7 @@ zig build run -Dblock-len=8 -- repos/zls/zig-out/bin/zls markov repos/zig/test/
                mode == markov.  the number of characters considered when
                choosing a random transition.
 ```
+
 # .env
 if a .env file is present at project root or next to the exe, the following keys will be used as default values.  
 ```console
