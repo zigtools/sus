@@ -53,13 +53,21 @@ main {
 
     h1 {
         margin-top: 0;
+        margin-bottom: 0;
 
         font-size: 32pt;
         font-weight: 900;
         letter-spacing: -0.022em;
     }
 
-    h2, th {
+    h2 {
+        margin-top: 0;
+        margin-bottom: 40px;
+        
+        font-family: monospace;
+    }
+
+    th {
         margin-top: 40px;
 
         font-size: 20pt;
@@ -69,12 +77,13 @@ main {
 
     p, a {
         color: white;
-        font-size: 16pt;
+        font-size: 14pt;
         letter-spacing: -0.011em;
     }
 }
 
 .log-listing {
+    margin-top: 40px;
     width: 100%;
 
     time {

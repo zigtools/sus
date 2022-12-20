@@ -79,6 +79,13 @@ function updateLogData() {
 
 updateLogData();
 
+fs.watch(savedLogsPath, {
+    recursive: true,
+}, (ev, filename) => {
+    console.log(`${filename}: ${ev}`);
+    updateLogData();
+});
+
 app.get("/", (req, res) => {
     res.render("index.ejs", {
         logData,
@@ -94,26 +101,6 @@ app.get("/group/:group", (req, res) => {
     res.render("group.ejs", {
         group,
         groupLogs: logGroups.get(group)
-    });
-});
-
-app.get("/log/:log", (req, res) => {
-    const log = path.basename(req.params.log);
-    const logDir = path.join(savedLogsPath, log);
-
-    const err = fs.readFileSync(path.join(logDir, "stderr.log")).toString();
-    const related = relations.find(_ => {
-        for (const p of _) {
-            if (p.log.name === log) return true;
-        }
-        return false;
-    });
-
-    res.render("info.ejs", {
-        logs: getLogs(),
-        log: logInfo(log),
-        err: err.match(panicRegex)[0],
-        related
     });
 });
 
