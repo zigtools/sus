@@ -3,7 +3,6 @@
         <th>Date</th>
         <th>Zig Version</th>
         <th>ZLS Version</th>
-        <th>Summary</th>
         <th>Links</th>
     </tr>
     <% for (const log of logs) { %>
@@ -11,7 +10,6 @@
             <td><time><%= +log.date %></time></td>
             <td><%= log.version.zig %></td>
             <td><%= log.version.zls %></td>
-            <td><code><%= log.summary %></code></td>
             <td><div class="log-listing-links">
                 <a href="/log/<%= log.name %>/stderr">Error</a>
                 <a href="/log/<%= log.name %>/stdin">Input</a>
