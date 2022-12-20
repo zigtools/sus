@@ -113,7 +113,7 @@ app.get("/log/:log/:kind", (req, res) => {
     if (!fs.existsSync(logDir) || !["stderr", "stdin", "stdout"].includes(kind)) return res.status(404).end("404");
 
     res.contentType("text");
-    res.end(fs.readFileSync(path.join(logDir, kind + ".log")).toString());
+    fs.createReadStream(path.join(logDir, kind + ".log")).pipe(res);
 });
 
 app.listen(80);
