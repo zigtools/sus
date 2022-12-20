@@ -1,9 +1,26 @@
 <%- include("includes/header.ejs") %>
 
 <main>
-    <h1>Fuzzing Output</h1>
+    <h1>Fuzzing Output by Group</h1>
 
-    <%- include("includes/listing.ejs", {logs}) %>
+    <table class="log-listing">
+        <tr>
+            <th>Latest</th>
+            <th>Frequency</th>
+            <th>Summary</th>
+            <th>Links</th>
+        </tr>
+        <% for (const group of groups) { %>
+            <tr>
+                <td><time><%= +group[1][0].date %></time></td>
+                <td><%= group[1].length %> out of <%= logData.length %> (<%= (group[1].length/logData.length*100).toFixed(2) %>%)</td>
+                <td><code><%= group[1][0].summary %></code></td>
+                <td><div>
+                    <a href="/group/<%= group[0] %>">Entries</a>
+                </div></td>
+            </tr>
+        <% } %>
+    </table>
 </main>
 
 <%- include("includes/footer.ejs") %>

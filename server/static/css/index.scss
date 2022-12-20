@@ -14,6 +14,11 @@ html, body {
 #nav {
     padding: 40px;
 
+    display: flex;
+
+    align-items: center;
+    justify-content: space-between;
+
     &__branding {
         &, &>* {
             vertical-align: middle;
@@ -31,6 +36,13 @@ html, body {
 
         &__zls {
             height: 30px;
+        }
+    }
+
+    &__links {
+        a {
+            color: white;
+            font-size: 18pt;
         }
     }
 }
@@ -55,7 +67,7 @@ main {
         letter-spacing: -0.021em;
     }
 
-    time, p, a {
+    p, a {
         color: white;
         font-size: 16pt;
         letter-spacing: -0.011em;

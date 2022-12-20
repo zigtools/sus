@@ -25,6 +25,7 @@ pub fn log(
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
+    // const zls_path = "repos/old_zlses/zls.exe";
     const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
     const markov_input_dir = "repos/zig/lib/std";
 
