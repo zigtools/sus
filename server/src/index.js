@@ -80,7 +80,7 @@ function updateLogData() {
 updateLogData();
 
 fs.watch(savedLogsPath, {
-    recursive: true,
+    // recursive: true,
 }, (ev, filename) => {
     console.log(`${filename}: ${ev}`);
     updateLogData();
