@@ -23,8 +23,9 @@ file_buf: std.ArrayListUnmanaged(u8),
 
 cycle: usize = 0,
 
-pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8) !Markov {
-    var itd = try std.fs.cwd().openIterableDir(input_dir, .{});
+pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer) !Markov {
+    std.debug.assert(fuzzer.args.base == .markov);
+    var itd = try std.fs.cwd().openIterableDir(fuzzer.args.base.markov.training_dir, .{});
     defer itd.close();
 
     var walker = try itd.walk(allocator);
@@ -60,7 +61,7 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
 
     file_buf.items.len = 0;
     try model.gen(file_buf.writer(allocator), .{
-        .maxlen = 1024,
+        .maxlen = fuzzer.args.base.markov.maxlen,
     });
 
     var file = try std.fs.cwd().createFile(pj, .{});
@@ -86,7 +87,7 @@ pub fn init(allocator: std.mem.Allocator, fuzzer: *Fuzzer, input_dir: []const u8
 pub fn openPrincipal(mm: *Markov) !void {
     mm.file_buf.items.len = 0;
     try mm.model.gen(mm.file_buf.writer(mm.allocator), .{
-        .maxlen = 1024 * 32,
+        .maxlen = mm.fuzzer.args.base.markov.maxlen,
     });
     try mm.file.seekTo(0);
     try mm.file.setEndPos(0);
@@ -97,12 +98,12 @@ pub fn openPrincipal(mm: *Markov) !void {
 pub fn fuzz(mm: *Markov, arena: std.mem.Allocator) !void {
     try mm.fuzzer.fuzzFeatureRandom(arena, mm.file_uri, mm.file_buf.items);
 
-    if (mm.cycle == 25) {
-        std.log.info("Regenerating file...", .{});
+    if (mm.cycle == mm.fuzzer.args.base.markov.cycles_per_gen) {
+        // std.log.info("Regenerating file...", .{});
 
         mm.file_buf.items.len = 0;
         try mm.model.gen(mm.file_buf.writer(mm.allocator), .{
-            .maxlen = 1024 * 32,
+            .maxlen = mm.fuzzer.args.base.markov.maxlen,
         });
         try mm.file.seekTo(0);
         try mm.file.setEndPos(0);

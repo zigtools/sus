@@ -27,9 +27,48 @@ stdout: std.fs.File,
 stderr_thread: std.Thread,
 // stdout_thread: std.Thread,
 
+args: Args,
+
+pub const Mode = std.meta.Tag(Args.Base);
+
+pub const Args = struct {
+    zls_path: []const u8,
+    base: Base,
+
+    pub const MarkovArg = enum {
+        @"--maxlen",
+        @"--cycles-per-gen",
+    };
+    pub const Markov = struct {
+        training_dir: []const u8,
+        maxlen: u32 = Defaults.maxlen,
+        cycles_per_gen: u32 = Defaults.cycles_per_gen,
+
+        pub const Defaults = struct {
+            pub const maxlen = 512;
+            pub const cycles_per_gen = 25;
+        };
+    };
+
+    const Base = union(enum) {
+        markov: Markov,
+    };
+
+    pub fn format(args: Args, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = try writer.write(args.zls_path);
+        _ = try writer.write(" ");
+        _ = try writer.write(@tagName(args.base));
+        switch (args.base) {
+            .markov => |m| {
+                try writer.print(" {s} --maxlen {} --cycles-per-gen {}", .{ m.training_dir, m.maxlen, m.cycles_per_gen });
+            },
+        }
+    }
+};
+
 pub fn create(
     allocator: std.mem.Allocator,
-    zls_path: []const u8,
+    args: Args,
     zig_version: []const u8,
     zls_version: []const u8,
 ) !*Fuzzer {
@@ -37,11 +76,12 @@ pub fn create(
 
     fuzzer.id = 0;
     fuzzer.allocator = allocator;
+    fuzzer.args = args;
 
     fuzzer.zig_version = zig_version;
     fuzzer.zls_version = zls_version;
 
-    fuzzer.proc = std.ChildProcess.init(&.{ zls_path, "--enable-debug-log" }, allocator);
+    fuzzer.proc = std.ChildProcess.init(&.{ args.zls_path, "--enable-debug-log" }, allocator);
 
     fuzzer.proc.stdin_behavior = .Pipe;
     fuzzer.proc.stderr_behavior = .Pipe;
