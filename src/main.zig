@@ -142,7 +142,9 @@ fn usage(comptime message: []const u8, message_args: anytype) UsageError {
 }
 
 pub fn main() !void {
-    var allocator = std.heap.page_allocator;
+    var main_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer main_arena.deinit();
+    const allocator = main_arena.allocator();
 
     var args = parseArgs(allocator, try loadEnv(allocator)) catch {
         std.os.exit(1);
@@ -170,15 +172,14 @@ pub fn main() !void {
         zls_version,
     );
     try fuzzer.initCycle();
-    var markov_arena = std.heap.ArenaAllocator.init(allocator);
-    defer markov_arena.deinit();
-    var markov = try Markov.init(markov_arena.allocator(), fuzzer);
+
+    var markov = try Markov.init(allocator, fuzzer);
     defer markov.deinit();
 
     try std.fs.cwd().makePath("saved_logs");
 
     while (true) {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
         markov.fuzz(arena.allocator()) catch {
