@@ -10,6 +10,9 @@ const Fuzzer = @This();
 allocator: std.mem.Allocator,
 proc: ChildProcess,
 
+zig_version: []const u8,
+zls_version: []const u8,
+
 read_buf: std.ArrayListUnmanaged(u8),
 write_buf: std.ArrayListUnmanaged(u8),
 open_buf: std.ArrayListUnmanaged(u8),
@@ -24,11 +27,19 @@ stdout: std.fs.File,
 stderr_thread: std.Thread,
 // stdout_thread: std.Thread,
 
-pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
+pub fn create(
+    allocator: std.mem.Allocator,
+    zls_path: []const u8,
+    zig_version: []const u8,
+    zls_version: []const u8,
+) !*Fuzzer {
     var fuzzer = try allocator.create(Fuzzer);
 
     fuzzer.id = 0;
     fuzzer.allocator = allocator;
+
+    fuzzer.zig_version = zig_version;
+    fuzzer.zls_version = zls_version;
 
     fuzzer.proc = std.ChildProcess.init(&.{ zls_path, "--enable-debug-log" }, allocator);
 
@@ -43,6 +54,10 @@ pub fn create(allocator: std.mem.Allocator, zls_path: []const u8) !*Fuzzer {
     fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
     fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
     fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
+
+    var info_buf: [512]u8 = undefined;
+    const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
+    try std.fs.cwd().writeFile("logs/info", sub_info_data);
 
     fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
 
@@ -84,6 +99,10 @@ pub fn reset(fuzzer: *Fuzzer, zls_path: []const u8) !void {
     fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
     fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
     fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
+
+    var info_buf: [512]u8 = undefined;
+    const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
+    try std.fs.cwd().writeFile("logs/info", sub_info_data);
 
     fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
 }

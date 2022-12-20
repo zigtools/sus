@@ -28,7 +28,25 @@ pub fn main() !void {
     const zls_path = "repos/zls/zig-out/bin/zls" ++ if (builtin.os.tag == .windows) ".exe" else "";
     const markov_input_dir = "repos/zig/lib/std";
 
-    var fuzzer = try Fuzzer.create(allocator, zls_path);
+    const zig_version = std.fmt.comptimePrint("{any}", .{builtin.zig_version});
+
+    const vers = try ChildProcess.exec(.{
+        .allocator = allocator,
+        .argv = &.{ zls_path, "--version" },
+    });
+    defer allocator.free(vers.stdout);
+    defer allocator.free(vers.stderr);
+
+    const zls_version = vers.stdout;
+
+    std.log.info("Running with Zig version {s} and zls version {s}", .{ zig_version, zls_version });
+
+    var fuzzer = try Fuzzer.create(
+        allocator,
+        zls_path,
+        zig_version,
+        zls_version,
+    );
     try fuzzer.initCycle();
     var markov = try Markov.init(allocator, fuzzer, markov_input_dir);
 

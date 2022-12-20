@@ -17,8 +17,8 @@ pub fn isHashMap(comptime T: type) bool {
     if (!@hasField(T.KV, "key")) return false;
     if (!@hasField(T.KV, "value")) return false;
 
-    const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].field_type;
-    const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].field_type;
+    const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].type;
+    const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
 
     if (!@hasDecl(T, "init")) return false;
     if (!@hasDecl(T, "put")) return false;
@@ -107,7 +107,7 @@ fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const typ
             var errors = error{UnexpectedFieldType};
 
             for (info.fields) |field| {
-                errors = errors || ParseInternalErrorImpl(field.field_type, inferred_set);
+                errors = errors || ParseInternalErrorImpl(field.type, inferred_set);
             }
 
             return errors;
@@ -126,7 +126,7 @@ fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const typ
             }
 
             if (isHashMap(T)) {
-                const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].field_type;
+                const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
 
                 errors = errors || ParseInternalErrorImpl(Value, inferred_set);
             }
@@ -136,7 +136,7 @@ fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const typ
             }
 
             for (info.fields) |field| {
-                errors = errors || ParseInternalErrorImpl(field.field_type, inferred_set);
+                errors = errors || ParseInternalErrorImpl(field.type, inferred_set);
             }
 
             return errors;
@@ -191,7 +191,7 @@ fn isAllocatorRequiredImpl(comptime T: type, comptime inferred_types: []const ty
         .Optional => |info| return isAllocatorRequiredImpl(info.child, inferred_set),
         .Union => |info| {
             for (info.fields) |field| {
-                if (isAllocatorRequiredImpl(field.field_type, inferred_set))
+                if (isAllocatorRequiredImpl(field.type, inferred_set))
                     return true;
             }
         },
@@ -211,10 +211,10 @@ fn isAllocatorRequiredImpl(comptime T: type, comptime inferred_types: []const ty
             }
 
             for (info.fields) |field| {
-                if (@typeInfo(field.field_type) == .Struct and @hasDecl(field.field_type, "__json_is_undefinedable")) {
-                    if (isAllocatorRequiredImpl(field.field_type.__json_T, inferred_set))
+                if (@typeInfo(field.type) == .Struct and @hasDecl(field.type, "__json_is_undefinedable")) {
+                    if (isAllocatorRequiredImpl(field.type.__json_T, inferred_set))
                         return true;
-                } else if (isAllocatorRequiredImpl(field.field_type, inferred_set))
+                } else if (isAllocatorRequiredImpl(field.type, inferred_set))
                     return true;
             }
         },
@@ -324,7 +324,7 @@ fn parseInternal(
             if (info.tag_type != null) {
                 inline for (info.fields) |field| {
                     if (parseInternal(
-                        field.field_type,
+                        field.type,
                         @typeName(T),
                         field.name,
                         json_value,
@@ -372,8 +372,8 @@ fn parseInternal(
             }
 
             if (comptime isHashMap(T)) {
-                const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].field_type;
-                const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].field_type;
+                const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].type;
+                const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
 
                 if (Key != []const u8) @compileError("HashMap key must be of type []const u8!");
 
@@ -419,7 +419,7 @@ fn parseInternal(
 
                 inline while (index < std.meta.fields(T).len) : (index += 1) {
                     tuple[index] = try parseInternal(
-                        std.meta.fields(T)[index].field_type,
+                        std.meta.fields(T)[index].type,
                         @typeName(T),
                         comptime std.fmt.comptimePrint("[{d}]", .{index}),
                         json_value.Array.items[index],
@@ -449,14 +449,14 @@ fn parseInternal(
 
                         if (field.default_value) |default| {
                             const parsed_value = try parseInternal(
-                                field.field_type,
+                                field.type,
                                 @typeName(T),
                                 field.name,
                                 field_value.?,
                                 maybe_allocator,
                                 suppress_error_logs,
                             );
-                            const default_value = @ptrCast(*const field.field_type, default).*;
+                            const default_value = @ptrCast(*const field.type, default).*;
 
                             // NOTE: This only works for strings!
                             // TODODODODODODO ASAP
@@ -468,10 +468,10 @@ fn parseInternal(
                         } else unreachable; // zig requires comptime fields to have a default initialization value
                     } else {
                         if (field_value) |fv| {
-                            if (@typeInfo(field.field_type) == .Struct and @hasDecl(field.field_type, "__json_is_undefinedable"))
+                            if (@typeInfo(field.type) == .Struct and @hasDecl(field.type, "__json_is_undefinedable"))
                                 @field(result, field.name) = .{
                                     .value = try parseInternal(
-                                        field.field_type.__json_T,
+                                        field.type.__json_T,
                                         @typeName(T),
                                         field.name,
                                         fv,
@@ -482,7 +482,7 @@ fn parseInternal(
                                 }
                             else
                                 @field(result, field.name) = try parseInternal(
-                                    field.field_type,
+                                    field.type,
                                     @typeName(T),
                                     field.name,
                                     fv,
@@ -490,13 +490,13 @@ fn parseInternal(
                                     suppress_error_logs,
                                 );
                         } else {
-                            if (@typeInfo(field.field_type) == .Struct and @hasDecl(field.field_type, "__json_is_undefinedable")) {
+                            if (@typeInfo(field.type) == .Struct and @hasDecl(field.type, "__json_is_undefinedable")) {
                                 @field(result, field.name) = .{
                                     .value = undefined,
                                     .missing = true,
                                 };
                             } else if (field.default_value) |default| {
-                                const default_value = @ptrCast(*const field.field_type, default).*;
+                                const default_value = @ptrCast(*const field.type, default).*;
                                 @field(result, field.name) = default_value;
                             } else {
                                 if (comptime !suppress_error_logs) logger.debug("required field {s}.{s} missing, at {s}", .{ @typeName(T), field.name, name });
@@ -810,12 +810,12 @@ pub fn stringify(
             }
             inline for (S.fields) |Field| {
                 // don't include void fields
-                if (Field.field_type == void) continue;
+                if (Field.type == void) continue;
 
                 var emit_field = true;
 
                 // don't include optional fields that are null when emit_null_optional_fields is set to false
-                if (@typeInfo(Field.field_type) == .Optional) {
+                if (@typeInfo(Field.type) == .Optional) {
                     if (options.emit_null_optional_fields == false) {
                         if (@field(value, Field.name) == null) {
                             emit_field = false;
@@ -1195,7 +1195,7 @@ test "json.parse custom check functions for unions" {
         fn RequestOrNotificationParseError() type {
             var err = ParseInternalError(RequestId);
             inline for (std.meta.fields(RequestParams)) |field| {
-                err = err || ParseInternalError(field.field_type);
+                err = err || ParseInternalError(field.type);
             }
             return err;
         }
@@ -1210,8 +1210,8 @@ test "json.parse custom check functions for unions" {
             request_or_notif.method = object.get("method").?.String;
 
             inline for (std.meta.fields(RequestParams)) |field| {
-                if (std.mem.eql(u8, request_or_notif.method, field.field_type.method)) {
-                    request_or_notif.params = @unionInit(RequestParams, field.name, try parse(field.field_type, object.get("params").?, allocator));
+                if (std.mem.eql(u8, request_or_notif.method, field.type.method)) {
+                    request_or_notif.params = @unionInit(RequestParams, field.name, try parse(field.type, object.get("params").?, allocator));
                 }
             }
 
