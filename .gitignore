@@ -4,3 +4,4 @@ zig-*
 /repos
 /staging/markov/*.zig
 node_modules
+/.env

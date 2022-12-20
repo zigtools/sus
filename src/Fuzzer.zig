@@ -32,6 +32,7 @@ args: Args,
 pub const Mode = std.meta.Tag(Args.Base);
 
 pub const Args = struct {
+    argsit: std.process.ArgIterator,
     zls_path: []const u8,
     base: Base,
 
@@ -63,6 +64,10 @@ pub const Args = struct {
                 try writer.print(" {s} --maxlen {} --cycles-per-gen {}", .{ m.training_dir, m.maxlen, m.cycles_per_gen });
             },
         }
+    }
+
+    pub fn deinit(args: *Args) void {
+        args.argsit.deinit();
     }
 };
 

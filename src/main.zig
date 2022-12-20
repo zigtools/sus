@@ -24,8 +24,8 @@ pub fn log(
     std.debug.print(format ++ "\n", args);
 }
 
-fn parseArgs(envmap: std.process.EnvMap) !Args {
-    var argsit = std.process.ArgIterator.init();
+fn parseArgs(allocator: std.mem.Allocator, envmap: std.process.EnvMap) !Args {
+    var argsit = try std.process.ArgIterator.initWithAllocator(allocator);
     _ = argsit.next();
 
     const zls_path = argsit.next() orelse
@@ -41,9 +41,13 @@ fn parseArgs(envmap: std.process.EnvMap) !Args {
         return usage("error: invalid mode '{s}'.", .{modearg});
     var sub_mode: enum { positional, named } = .positional;
 
-    var args: Args = .{ .zls_path = zls_path, .base = switch (mode) {
-        .markov => .{ .markov = .{ .training_dir = "" } },
-    } };
+    var args: Args = .{
+        .argsit = argsit,
+        .zls_path = zls_path,
+        .base = switch (mode) {
+            .markov => .{ .markov = .{ .training_dir = "" } },
+        },
+    };
 
     while (argsit.next()) |arg| {
         switch (mode) {
@@ -140,9 +144,10 @@ fn usage(comptime message: []const u8, message_args: anytype) UsageError {
 pub fn main() !void {
     var allocator = std.heap.page_allocator;
 
-    const args = parseArgs(try loadEnv(allocator)) catch {
+    var args = parseArgs(allocator, try loadEnv(allocator)) catch {
         std.os.exit(1);
     };
+    defer args.deinit();
     const zig_version = std.fmt.comptimePrint("{any}", .{builtin.zig_version});
 
     const vers = try ChildProcess.exec(.{
