@@ -3,6 +3,7 @@ const lsp = @import("lsp.zig");
 const uri = @import("uri.zig");
 const tres = @import("tres.zig");
 const utils = @import("utils.zig");
+const builtin = @import("builtin");
 const ChildProcess = std.ChildProcess;
 
 const Fuzzer = @This();
@@ -13,24 +14,21 @@ proc: ChildProcess,
 zig_version: []const u8,
 zls_version: []const u8,
 
-read_buf: std.ArrayListUnmanaged(u8),
-write_buf: std.ArrayListUnmanaged(u8),
-open_buf: std.ArrayListUnmanaged(u8),
+stdout_buf: std.ArrayListUnmanaged(u8) = .{},
+stdin_buf: std.ArrayListUnmanaged(u8) = .{},
+log_buf: std.ArrayListUnmanaged(u8) = .{},
 
 prng: std.rand.DefaultPrng,
 id: usize = 0,
 
-stdin: std.fs.File,
-stderr: std.fs.File,
-stdout: std.fs.File,
-
+stderr_file: std.fs.File,
+stdout_file: std.fs.File,
+stdin_file: std.fs.File,
 stderr_thread: std.Thread,
-// stdout_thread: std.Thread,
 
 args: Args,
 
 pub const Mode = std.meta.Tag(Args.Base);
-
 pub const Args = struct {
     argsit: std.process.ArgIterator,
     zls_path: []const u8,
@@ -77,79 +75,68 @@ pub fn create(
     zig_version: []const u8,
     zls_version: []const u8,
 ) !*Fuzzer {
+    var seed: u64 = 0;
+    try std.os.getrandom(std.mem.asBytes(&seed));
+
     var fuzzer = try allocator.create(Fuzzer);
 
+    fuzzer.* = .{
+        .allocator = allocator,
+        .args = args,
+        .zig_version = zig_version,
+        .zls_version = zls_version,
+        .stdin_file = undefined,
+        .stdout_file = undefined,
+        .stderr_file = undefined,
+        .stderr_thread = undefined,
+        .proc = undefined,
+        .prng = std.rand.DefaultPrng.init(seed),
+    };
+    try fuzzer.reset();
+    return fuzzer;
+}
+
+pub fn reset(fuzzer: *Fuzzer) !void {
     fuzzer.id = 0;
-    fuzzer.allocator = allocator;
-    fuzzer.args = args;
 
-    fuzzer.zig_version = zig_version;
-    fuzzer.zls_version = zls_version;
-
-    fuzzer.proc = std.ChildProcess.init(&.{ args.zls_path, "--enable-debug-log" }, allocator);
+    fuzzer.proc = std.ChildProcess.init(&.{ fuzzer.args.zls_path, "--enable-debug-log" }, fuzzer.allocator);
 
     fuzzer.proc.stdin_behavior = .Pipe;
     fuzzer.proc.stderr_behavior = .Pipe;
-
     fuzzer.proc.stdout_behavior = .Pipe;
 
     try fuzzer.proc.spawn();
 
     try std.fs.cwd().makePath("logs");
-    fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
-    fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
-    fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
 
     var info_buf: [512]u8 = undefined;
     const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
     try std.fs.cwd().writeFile("logs/info", sub_info_data);
 
+    fuzzer.stdin_file = try std.fs.cwd().createFile("logs/stdin.log", .{ .read = true });
+    _ = try fuzzer.stdin_file.write(eof_marker);
+
+    fuzzer.stdout_file = try std.fs.cwd().createFile("logs/stdout.log", .{ .read = true });
+    _ = try fuzzer.stdout_file.write(eof_marker);
+
+    fuzzer.stderr_file = try std.fs.cwd().createFile("logs/stderr.log", .{ .read = true });
+    _ = try fuzzer.stderr_file.write(eof_marker);
     fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
-
-    var seed: u64 = 0;
-    try std.os.getrandom(std.mem.asBytes(&seed));
-
-    fuzzer.read_buf = .{};
-    fuzzer.write_buf = .{};
-    fuzzer.open_buf = .{};
-    fuzzer.prng = std.rand.DefaultPrng.init(seed);
-
-    return fuzzer;
 }
 
-pub fn kill(fuzzer: *Fuzzer) void {
+pub fn kill(fuzzer: *Fuzzer) !void {
     _ = fuzzer.proc.wait() catch |err| {
         std.log.err("{s}", .{@errorName(err)});
     };
 
-    fuzzer.stdin.close();
-    fuzzer.stderr.close();
-    fuzzer.stdout.close();
-
     fuzzer.stderr_thread.join();
-}
 
-pub fn reset(fuzzer: *Fuzzer, zls_path: []const u8) !void {
-    fuzzer.id = 0;
+    // reorder must be here after stderr_thread.join() and before logs are closed
+    try fuzzer.reorderLogs();
 
-    fuzzer.proc = std.ChildProcess.init(&.{ zls_path, "--enable-debug-log" }, fuzzer.allocator);
-
-    fuzzer.proc.stdin_behavior = .Pipe;
-    fuzzer.proc.stderr_behavior = .Pipe;
-    fuzzer.proc.stdout_behavior = .Pipe;
-
-    try fuzzer.proc.spawn();
-
-    try std.fs.cwd().makePath("logs");
-    fuzzer.stdin = try std.fs.cwd().createFile("logs/stdin.log", .{});
-    fuzzer.stderr = try std.fs.cwd().createFile("logs/stderr.log", .{});
-    fuzzer.stdout = try std.fs.cwd().createFile("logs/stdout.log", .{});
-
-    var info_buf: [512]u8 = undefined;
-    const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
-    try std.fs.cwd().writeFile("logs/info", sub_info_data);
-
-    fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
+    fuzzer.stdin_file.close();
+    fuzzer.stderr_file.close();
+    fuzzer.stdout_file.close();
 }
 
 pub fn deinit(fuzzer: *Fuzzer) void {
@@ -157,25 +144,90 @@ pub fn deinit(fuzzer: *Fuzzer) void {
         std.log.err("{s}", .{@errorName(err)});
     };
 
-    fuzzer.read_buf.deinit(fuzzer.allocator);
-    fuzzer.write_buf.deinit(fuzzer.allocator);
-    fuzzer.open_buf.deinit(fuzzer.allocator);
-
-    fuzzer.stdin.close();
-    fuzzer.stderr.close();
-    fuzzer.stdout.close();
+    fuzzer.stdout_buf.deinit(fuzzer.allocator);
+    fuzzer.stdin_buf.deinit(fuzzer.allocator);
+    fuzzer.log_buf.deinit(fuzzer.allocator);
 
     fuzzer.stderr_thread.join();
+
+    fuzzer.stdin_file.close();
+    fuzzer.stderr_file.close();
+    fuzzer.stdout_file.close();
 
     fuzzer.allocator.destroy(fuzzer);
 }
 
-fn readStderr(fuzzer: *Fuzzer) void {
-    var lf = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
+const eof_marker = "\n\n--- EOF ---\n\n";
+const eof_marker_offset = -@intCast(isize, eof_marker.len);
+const file_cap = std.mem.page_size * 2;
 
+/// writes to file in a circular manner.
+/// because of this `eof_marker` is used to denote EOF
+fn fileWrite(bytes_: []const u8, file: std.fs.File) !void {
+    var bytes: []const u8 = bytes_;
+    // TODO  this check should be removed once this method is known to work.
+    if (builtin.mode == .Debug) {
+        // verify the bytes at file.pos match `eof_marker`
+        const eof_pos = try file.getPos();
+        std.debug.assert(eof_pos >= eof_marker.len);
+        var buf: [eof_marker.len]u8 = undefined;
+        try file.seekBy(eof_marker_offset);
+        _ = try file.read(&buf);
+        std.debug.assert(std.mem.eql(u8, eof_marker, &buf));
+    }
+    try file.seekBy(eof_marker_offset);
+    while (bytes.len > 0) {
+        var len = @min(file_cap, bytes.len);
+        const tail_len = file_cap - try file.getPos();
+        if (len > tail_len) {
+            const discard = len - tail_len;
+            const amt = try file.write(bytes[0..discard]);
+            std.debug.assert(amt == discard);
+            bytes = bytes[discard..];
+            len -= discard;
+            try file.seekTo(0);
+        }
+        const amt = try file.write(bytes[0..len]);
+        std.debug.assert(amt == len);
+        bytes = bytes[len..];
+    }
+    _ = try file.write(eof_marker);
+}
+
+// needed because files are written to circularly like a ring buffer.
+// removes `eof_marker`. reorders file so that it starts after `eof_marker` and
+// ends just before it.
+fn reorderLog(fuzzer: *Fuzzer, file: std.fs.File) !void {
+    fuzzer.log_buf.items.len = 0;
+    const file_size = file.getEndPos() catch return;
+    try fuzzer.log_buf.ensureTotalCapacity(fuzzer.allocator, file_size);
+    fuzzer.log_buf.items.len = file_size;
+    try file.seekTo(0);
+    const amt = try file.readAll(fuzzer.log_buf.items);
+    std.debug.assert(amt == file_size);
+    const eof_idx = std.mem.indexOf(u8, fuzzer.log_buf.items, eof_marker) orelse unreachable;
+    try file.setEndPos(0);
+    try file.seekTo(0);
+    _ = try file.writeAll(fuzzer.log_buf.items[eof_idx + eof_marker.len ..]);
+    _ = try file.writeAll(fuzzer.log_buf.items[0..eof_idx]);
+}
+
+// rewrites log files considering `eof_marker`.
+// makes them easier to read. reader doesn't have to search for `eof_marker`.
+fn reorderLogs(fuzzer: *Fuzzer) !void {
+    try fuzzer.reorderLog(fuzzer.stdin_file);
+    try fuzzer.reorderLog(fuzzer.stdout_file);
+    try fuzzer.reorderLog(fuzzer.stderr_file);
+}
+
+fn readStderr(fuzzer: *Fuzzer) void {
+    var buf: [std.mem.page_size]u8 = undefined;
     while (true) {
-        var stderr = fuzzer.proc.stderr orelse break;
-        lf.pump(stderr.reader(), fuzzer.stderr.writer()) catch break;
+        const stderr = fuzzer.proc.stderr orelse break;
+        const reader = stderr.reader();
+        const amt = reader.read(&buf) catch break;
+        fileWrite(buf[0..amt], fuzzer.stderr_file) catch unreachable;
+        if (fuzzer.id % 1000 == 0) std.log.warn("heartbeat {}", .{fuzzer.id});
     }
 
     std.log.err("stderr failure", .{});
@@ -222,35 +274,38 @@ pub fn random(fuzzer: *Fuzzer) std.rand.Random {
 }
 
 pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
-    fuzzer.write_buf.items.len = 0;
+    fuzzer.stdin_buf.items.len = 0;
 
     try tres.stringify(
         data,
         .{ .emit_null_optional_fields = false },
-        fuzzer.write_buf.writer(fuzzer.allocator),
+        fuzzer.stdin_buf.writer(fuzzer.allocator),
     );
 
     var zls_stdin = fuzzer.proc.stdin.?.writer();
-    try zls_stdin.print("Content-Length: {d}\r\n\r\n", .{fuzzer.write_buf.items.len});
-    try zls_stdin.writeAll(fuzzer.write_buf.items);
+    try zls_stdin.print("Content-Length: {d}\r\n\r\n", .{fuzzer.stdin_buf.items.len});
+    try zls_stdin.writeAll(fuzzer.stdin_buf.items);
 
-    try fuzzer.stdin.writeAll(fuzzer.write_buf.items);
-    try fuzzer.stdin.writeAll("\n\n");
+    try fileWrite(fuzzer.stdin_buf.items, fuzzer.stdin_file);
+    try fileWrite("\n\n", fuzzer.stdin_file);
 }
 
 pub fn readToBuffer(fuzzer: *Fuzzer) !void {
     const header = try fuzzer.readRequestHeader();
-    try fuzzer.read_buf.ensureTotalCapacity(fuzzer.allocator, header.content_length);
-    fuzzer.read_buf.items.len = header.content_length;
-    _ = try fuzzer.proc.stdout.?.reader().readAll(fuzzer.read_buf.items);
+    try fuzzer.stdout_buf.ensureTotalCapacity(fuzzer.allocator, header.content_length + 1);
+    fuzzer.stdout_buf.items.len = header.content_length;
+    _ = try fuzzer.proc.stdout.?.reader().readAll(fuzzer.stdout_buf.items);
+    fuzzer.stdout_buf.items.len += 1;
+    fuzzer.stdout_buf.items[fuzzer.stdout_buf.items.len - 1] = '\n';
 
-    _ = try fuzzer.stdout.writeAll(fuzzer.read_buf.items);
-    _ = try fuzzer.stdout.writeAll("\n");
+    // TODO figure out why stdout_file ends being 2x file_cap when it should not
+    // get longer than file_cap
+    try fileWrite(fuzzer.stdout_buf.items, fuzzer.stdout_file);
 }
 
 pub fn readAndPrint(fuzzer: *Fuzzer) !void {
     try fuzzer.readToBuffer();
-    std.log.info("{s}", .{fuzzer.read_buf.items});
+    std.log.info("{s}", .{fuzzer.stdout_buf.items});
 }
 
 pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
@@ -258,7 +313,7 @@ pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
         try fuzzer.readToBuffer();
 
         var tree = std.json.Parser.init(arena, true);
-        const vt = try tree.parse(fuzzer.read_buf.items);
+        const vt = try tree.parse(fuzzer.stdout_buf.items);
 
         if (vt.root.Object.get("method") != null) continue;
         if (vt.root.Object.get("id") != null) break;
