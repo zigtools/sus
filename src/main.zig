@@ -142,7 +142,8 @@ fn usage(comptime message: []const u8, message_args: anytype) UsageError {
 }
 
 pub fn main() !void {
-    var allocator = std.heap.page_allocator;
+    var main_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = main_arena.allocator();
 
     var args = parseArgs(allocator, try loadEnv(allocator)) catch {
         std.os.exit(1);
@@ -169,16 +170,16 @@ pub fn main() !void {
         zig_version,
         zls_version,
     );
+    defer fuzzer.deinit();
     try fuzzer.initCycle();
-    var markov_arena = std.heap.ArenaAllocator.init(allocator);
-    defer markov_arena.deinit();
-    var markov = try Markov.init(markov_arena.allocator(), fuzzer);
+    var markov = try Markov.init(allocator, fuzzer);
     defer markov.deinit();
 
     try std.fs.cwd().makePath("saved_logs");
+    const principal_path = try std.fs.path.join(main_arena.allocator(), &.{ "staging", "markov", "principal.zig" });
 
     while (true) {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
         markov.fuzz(arena.allocator()) catch {
@@ -187,10 +188,11 @@ pub fn main() !void {
             fuzzer.kill();
 
             var buf: [512]u8 = undefined;
-            const sub = try std.fmt.bufPrint(&buf, "saved_logs/logs-{d}", .{std.time.milliTimestamp()});
-            try std.fs.cwd().rename("logs", sub);
+            const log_dir = try std.fmt.bufPrint(&buf, "saved_logs/logs-{d}", .{std.time.milliTimestamp()});
+            try std.fs.cwd().rename("logs", log_dir);
+            try std.fs.cwd().copyFile(principal_path, try std.fs.cwd().openDir(log_dir, .{}), "principal.zig", .{});
 
-            try fuzzer.reset(args.zls_path);
+            try fuzzer.reset();
             try fuzzer.initCycle();
             try markov.openPrincipal();
         };
