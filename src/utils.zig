@@ -84,6 +84,8 @@ pub fn randomize(
 }
 
 pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp.Position {
+    // TODO: Consider offsets
+
     const line_count = std.mem.count(u8, data, "\n");
     const line = if (line_count == 0) 0 else random.intRangeLessThan(usize, 0, line_count);
     var lines = std.mem.split(u8, data, "\n");
@@ -99,7 +101,7 @@ pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp.Position {
     }
 
     return .{
-        .line = line,
-        .character = character,
+        .line = @intCast(u32, line),
+        .character = @intCast(u32, character),
     };
 }
