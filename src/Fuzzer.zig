@@ -3,6 +3,7 @@ const lsp = @import("lsp.zig");
 const uri = @import("uri.zig");
 const tres = @import("tres.zig");
 const utils = @import("utils.zig");
+const binary = @import("binary.zig");
 const ChildProcess = std.ChildProcess;
 
 const Fuzzer = @This();
@@ -250,8 +251,9 @@ pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
     var zls_stdin = fuzzer.proc.stdin.?.writer();
     try zls_stdin.print("Content-Length: {d}\r\n\r\n", .{fuzzer.buf.items.len});
     try zls_stdin.writeAll(fuzzer.buf.items);
-    try fuzzer.buf.appendSlice(fuzzer.allocator, "\n\n");
 
+    fuzzer.buf.items.len = 0;
+    try binary.encode(fuzzer.buf.writer(fuzzer.allocator), data);
     try fuzzer.stdin_file.writer().writeAll(fuzzer.buf.items);
 }
 
