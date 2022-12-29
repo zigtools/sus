@@ -182,6 +182,16 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
+        if (fuzzer.id == 100_000) {
+            std.log.info("Fuzzer running too long with no result... restarting", .{});
+            markov.cycle = 0;
+            fuzzer.kill();
+
+            try fuzzer.reset();
+            try fuzzer.initCycle();
+            try markov.openPrincipal();
+        }
+
         markov.fuzz(arena.allocator()) catch {
             std.log.info("Restarting fuzzer...", .{});
             markov.cycle = 0;

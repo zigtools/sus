@@ -257,19 +257,22 @@ pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
     try fuzzer.stdin_file.writer().writeAll(fuzzer.buf.items);
 }
 
-pub fn readToBuffer(fuzzer: *Fuzzer) !void {
+pub fn readValue(fuzzer: *Fuzzer, arena: std.mem.Allocator) !std.json.Value {
     const header = try fuzzer.readRequestHeader();
     try fuzzer.buf.ensureTotalCapacity(fuzzer.allocator, header.content_length + 1);
     fuzzer.buf.items.len = header.content_length;
     _ = try fuzzer.proc.stdout.?.reader().readAll(fuzzer.buf.items);
     fuzzer.buf.items.len += 1;
     fuzzer.buf.items[fuzzer.buf.items.len - 1] = '\n';
-    try fuzzer.stdout_file.writer().writeAll(fuzzer.buf.items);
-}
 
-pub fn readAndPrint(fuzzer: *Fuzzer) !void {
-    try fuzzer.readToBuffer();
-    std.log.info("{s}", .{fuzzer.buf.items});
+    var tree = std.json.Parser.init(arena, true);
+    const vt = (try tree.parse(fuzzer.buf.items)).root;
+
+    fuzzer.buf.items.len = 0;
+    try binary.encode(fuzzer.buf.writer(fuzzer.allocator), vt);
+    try fuzzer.stdout_file.writer().writeAll(fuzzer.buf.items);
+
+    return vt;
 }
 
 pub fn closeFiles(fuzzer: *Fuzzer) void {
@@ -280,13 +283,10 @@ pub fn closeFiles(fuzzer: *Fuzzer) void {
 
 pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
     while (true) {
-        try fuzzer.readToBuffer();
+        const val = try fuzzer.readValue(arena);
 
-        var tree = std.json.Parser.init(arena, true);
-        const vt = try tree.parse(fuzzer.buf.items);
-
-        if (vt.root.Object.get("method") != null) continue;
-        if (vt.root.Object.get("id") != null) break;
+        if (val.Object.get("method") != null) continue;
+        if (val.Object.get("id") != null) break;
     }
 }
 
