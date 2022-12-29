@@ -26,61 +26,43 @@ stderr_thread: std.Thread,
 
 args: Args,
 
-/// represents rotating log files
 pub const LogFile = struct {
-    files: [len]std.fs.File,
-    /// the index of the current file and name
-    idx: u8 = 0,
-    /// saved file names - used for cleanup and re-initialization
-    names: [len][]const u8,
+    const Compressor = std.compress.deflate.Compressor(std.fs.File.Writer);
 
-    pub const len = 2;
-    pub const file_cap = std.mem.page_size * 2;
+    allocator: std.mem.Allocator,
+    path: []const u8,
 
-    /// init idx and names but leaves files undefined
-    pub fn init(comptime name_fmt: []const u8, allocator: std.mem.Allocator) !LogFile {
-        var result: LogFile = undefined;
-        result.idx = 0;
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    loaded: bool = false,
+    file: std.fs.File,
+    compressor: Compressor,
 
-        for (result.names) |*name, i| {
-            var buf2: [8]u8 = undefined;
-            const num = if (i == 0) "" else try std.fmt.bufPrint(&buf2, ".{}", .{i});
-            name.* = try allocator.dupe(u8, try std.fmt.bufPrint(&buf, name_fmt, .{num}));
-        }
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !LogFile {
+        var lf = LogFile{
+            .allocator = allocator,
+            .path = path,
 
-        return result;
+            .file = undefined,
+            .compressor = undefined,
+        };
+        return lf;
     }
 
-    /// create files using previously init names
-    pub fn createFiles(lf: *LogFile) !void {
-        for (lf.files) |*file, i|
-            file.* = try std.fs.cwd().createFile(lf.names[i], .{ .read = true, .truncate = true });
-    }
-    pub fn currentFile(lf: LogFile) std.fs.File {
-        return lf.files[lf.idx];
-    }
-    pub fn currentName(lf: LogFile) []const u8 {
-        return lf.names[lf.idx];
-    }
-    /// close all files
-    pub fn close(lf: *LogFile) void {
-        for (lf.files) |f| f.close();
-    }
-    pub fn nextIdx(idx: u8) u8 {
-        return (idx + 1) % len;
+    pub fn reset(log_file: *LogFile) !void {
+        if (log_file.loaded) log_file.file.close();
+        log_file.file = try std.fs.cwd().createFile(log_file.path, .{});
+        log_file.compressor = try std.compress.deflate.compressor(log_file.allocator, log_file.file.writer(), .{});
+        log_file.loaded = true;
     }
 
-    fn writeFile(lf: *LogFile, bytes: []const u8, debug: bool) !void {
-        _ = debug;
-        const file = lf.currentFile();
-        _ = try file.writeAll(bytes);
-        if (try file.getEndPos() > file_cap / LogFile.len) {
-            lf.idx = LogFile.nextIdx(lf.idx);
-            const file2 = lf.currentFile();
-            try file2.setEndPos(0);
-            try file2.seekTo(0);
-        }
+    pub fn close(log_file: *LogFile) void {
+        if (!log_file.loaded) @panic("Double close");
+        log_file.compressor.flush() catch @panic("Flush failure");
+        log_file.file.close();
+        log_file.loaded = false;
+    }
+
+    pub fn writer(log_file: *LogFile) Compressor.Writer {
+        return log_file.compressor.writer();
     }
 };
 
@@ -142,9 +124,9 @@ pub fn create(
         .args = args,
         .zig_version = zig_version,
         .zls_version = zls_version,
-        .stdin_file = try LogFile.init("logs/stdin{s}.log", allocator),
-        .stdout_file = try LogFile.init("logs/stdout{s}.log", allocator),
-        .stderr_file = try LogFile.init("logs/stderr{s}.log", allocator),
+        .stdin_file = try LogFile.init(allocator, "logs/stdin.log"),
+        .stdout_file = try LogFile.init(allocator, "logs/stdout.log"),
+        .stderr_file = try LogFile.init(allocator, "logs/stderr.log"),
         .stderr_thread = undefined,
         .proc = undefined,
         .prng = std.rand.DefaultPrng.init(seed),
@@ -161,7 +143,9 @@ pub fn kill(fuzzer: *Fuzzer) void {
     fuzzer.stderr_thread.join();
 
     // merge must be here after stderr_thread.join() to avoid race
-    fuzzer.mergeAndCloseLogs() catch unreachable;
+    fuzzer.stdin_file.close();
+    fuzzer.stdout_file.close();
+    fuzzer.stderr_file.close();
 }
 
 pub fn reset(fuzzer: *Fuzzer) !void {
@@ -176,9 +160,9 @@ pub fn reset(fuzzer: *Fuzzer) !void {
     try fuzzer.proc.spawn();
 
     try std.fs.cwd().makePath("logs");
-    try fuzzer.stdin_file.createFiles();
-    try fuzzer.stdout_file.createFiles();
-    try fuzzer.stderr_file.createFiles();
+    try fuzzer.stdin_file.reset();
+    try fuzzer.stdout_file.reset();
+    try fuzzer.stderr_file.reset();
 
     var info_buf: [512]u8 = undefined;
     const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
@@ -209,7 +193,7 @@ fn readStderr(fuzzer: *Fuzzer) void {
         const stderr = fuzzer.proc.stderr orelse break;
         const reader = stderr.reader();
         const amt = reader.read(&buf) catch break;
-        fuzzer.stderr_file.writeFile(buf[0..amt], false) catch unreachable;
+        fuzzer.stderr_file.writer().writeAll(buf[0..amt]) catch unreachable;
         if (fuzzer.id % 1000 == 0) std.log.info("heartbeat {}", .{fuzzer.id});
     }
 }
@@ -268,7 +252,7 @@ pub fn writeJson(fuzzer: *Fuzzer, data: anytype) !void {
     try zls_stdin.writeAll(fuzzer.buf.items);
     try fuzzer.buf.appendSlice(fuzzer.allocator, "\n\n");
 
-    try fuzzer.stdin_file.writeFile(fuzzer.buf.items, false);
+    try fuzzer.stdin_file.writer().writeAll(fuzzer.buf.items);
 }
 
 pub fn readToBuffer(fuzzer: *Fuzzer) !void {
@@ -278,7 +262,7 @@ pub fn readToBuffer(fuzzer: *Fuzzer) !void {
     _ = try fuzzer.proc.stdout.?.reader().readAll(fuzzer.buf.items);
     fuzzer.buf.items.len += 1;
     fuzzer.buf.items[fuzzer.buf.items.len - 1] = '\n';
-    try fuzzer.stdout_file.writeFile(fuzzer.buf.items, true);
+    try fuzzer.stdout_file.writer().writeAll(fuzzer.buf.items);
 }
 
 pub fn readAndPrint(fuzzer: *Fuzzer) !void {
@@ -286,46 +270,10 @@ pub fn readAndPrint(fuzzer: *Fuzzer) !void {
     std.log.info("{s}", .{fuzzer.buf.items});
 }
 
-/// copy contents from rotated log files into single file in correct order.
-/// also rename the file so that names are always consistent
-/// (ie stderr.1.log -> stderr.log).
-fn mergeAndCloseLogs(fuzzer: *Fuzzer) !void {
-    try fuzzer.mergeAndCloseLog(fuzzer.stdin_file);
-    try fuzzer.mergeAndCloseLog(fuzzer.stdout_file);
-    try fuzzer.mergeAndCloseLog(fuzzer.stderr_file);
-}
-
-fn mergeAndCloseLog(fuzzer: *Fuzzer, log_file: LogFile) !void {
-    fuzzer.buf.items.len = 0;
-    const startidx = log_file.idx;
-    // start with the 'oldest' idx, stop at current
-    var idx = LogFile.nextIdx(log_file.idx);
-    while (true) : (idx = LogFile.nextIdx(idx)) {
-        const file = log_file.files[idx];
-        const buf_start = fuzzer.buf.items.len;
-        const file_size = try file.getEndPos();
-        try fuzzer.buf.ensureUnusedCapacity(fuzzer.allocator, file_size);
-        fuzzer.buf.items.len += file_size;
-        try file.seekTo(0);
-        const amt = try file.readAll(fuzzer.buf.items[buf_start..fuzzer.buf.items.len]);
-        std.debug.assert(amt == file_size);
-        if (idx == startidx)
-            break;
-        // done with this 'old' file. close and delete it.
-        file.close();
-        try std.fs.cwd().deleteFile(log_file.names[idx]);
-    }
-    // write captured contents to current file
-    const file = log_file.currentFile();
-    try file.setEndPos(0);
-    try file.seekTo(0);
-    _ = try file.write(fuzzer.buf.items);
-    file.close();
-    // rename the log file if necessary
-    // not necessary if idx == 0 (same name in this case)
-    if (log_file.idx != 0) {
-        try std.fs.cwd().rename(log_file.currentName(), log_file.names[0]);
-    }
+pub fn closeFiles(fuzzer: *Fuzzer) void {
+    fuzzer.stdin_file.close();
+    fuzzer.stderr_file.close();
+    fuzzer.stdout_file.close();
 }
 
 pub fn readUntilLastResponse(fuzzer: *Fuzzer, arena: std.mem.Allocator) !void {
