@@ -19,7 +19,7 @@ pub fn randomize(
         };
         const selection = random.enumValue(Valids);
         inline for (@typeInfo(T).Union.fields) |field| {
-            if (std.mem.eql(u8, field.name, @tagName(selection))) return @unionInit(T, field.name, try randomize(field.field_type, allocator, random));
+            if (std.mem.eql(u8, field.name, @tagName(selection))) return @unionInit(T, field.name, try randomize(field.type, allocator, random));
         }
         unreachable;
     }
@@ -38,7 +38,7 @@ pub fn randomize(
             const pi = @typeInfo(T).Pointer;
             switch (pi.size) {
                 .Slice => {
-                    var n = random.intRangeLessThan(usize, 0, 64);
+                    var n = random.intRangeLessThan(usize, 0, 10);
                     var slice = try allocator.alloc(pi.child, n);
                     for (slice) |*v| {
                         if (pi.child == u8)
@@ -65,7 +65,7 @@ pub fn randomize(
                     if (comptime std.mem.eql(u8, field.name, "uri"))
                         @field(s, "uri") = "file:///C:/Programming/Zig/buzz-test/hello.zig"
                     else
-                        @field(s, field.name) = try randomize(comptime field.field_type, allocator, random);
+                        @field(s, field.name) = try randomize(comptime field.type, allocator, random);
                 }
             }
             break :b s;
@@ -75,7 +75,7 @@ pub fn randomize(
         .Union => b: {
             const selection = random.intRangeLessThan(usize, 0, @typeInfo(T).Union.fields.len);
             inline for (@typeInfo(T).Union.fields) |field, index| {
-                if (index == selection) break :b @unionInit(T, field.name, try randomize(field.field_type, allocator, random));
+                if (index == selection) break :b @unionInit(T, field.name, try randomize(field.type, allocator, random));
             }
             unreachable;
         },
