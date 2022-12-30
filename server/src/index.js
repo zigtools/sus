@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const fflate = require("fflate");
 const crypto = require("crypto");
 const express = require("express");
 
@@ -20,8 +21,18 @@ let logData = [];
 let logGroups = new Map();
 let logMap = new Map();
 
+function stream2buffer(stream) {
+    return new Promise((resolve, reject) => {
+        const _buf = [];
+
+        stream.on("data", (chunk) => _buf.push(chunk));
+        stream.on("end", () => resolve(Buffer.concat(_buf)));
+        stream.on("error", (err) => reject(err));
+    });
+} 
+
 function populateStderrData(log) {
-    const stderr = fs.readFileSync(path.join(savedLogsPath, log.name, "stderr.log")).toString();
+    const stderr = new TextDecoder("utf-8").decode(fflate.inflateSync(fs.readFileSync(path.join(savedLogsPath, log.name, "stderr.log"))));
 
     let match = stderr.match(panicRegex);
     if (!match) {
@@ -59,6 +70,20 @@ function populateLogGroups(log) {
         g.push(log);
     else
         logGroups.set(h, [log]);
+    logMap.set(log.name, {});
+}
+
+function updateLogDataIndividual(log) {
+    let l = {
+        name: log,
+        date: new Date(+log.split("-")[1]),
+    };
+
+    populateStderrData(l);
+    populateVersionData(l);
+    populateLogGroups(l);
+
+    logData.unshift(l);
 }
 
 function updateLogData() {
@@ -78,12 +103,14 @@ function updateLogData() {
 }
 
 updateLogData();
+console.log("Ready!");
 
-fs.watch(savedLogsPath, {
-    // recursive: true,
-}, (ev, filename) => {
+fs.watch(savedLogsPath, {}, (ev, filename) => {
     console.log(`${filename}: ${ev}`);
-    updateLogData();
+
+    if (logMap.has(filename)) return;
+
+    updateLogDataIndividual(filename);
 });
 
 app.get("/", (req, res) => {

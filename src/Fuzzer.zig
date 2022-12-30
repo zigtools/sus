@@ -2,7 +2,6 @@ const std = @import("std");
 const lsp = @import("zig-lsp");
 const uri = @import("uri.zig");
 const utils = @import("utils.zig");
-const binary = @import("binary.zig");
 const lsp_types = lsp.types;
 const ChildProcess = std.ChildProcess;
 
@@ -369,38 +368,20 @@ pub fn fuzzFeatureRandom(
 
 pub fn @"textDocument/publishDiagnostics"(_: *Connection, _: lsp.Params("textDocument/publishDiagnostics")) !void {}
 
-pub fn lspRecvPre(
+pub fn dataRecv(
     conn: *Connection,
-    comptime method: []const u8,
-    comptime kind: lsp.MessageKind,
-    id: ?lsp_types.RequestId,
-    payload: lsp.Payload(method, kind),
+    data: []const u8,
 ) !void {
     const fuzzer = conn.context;
     const writer = fuzzer.stdout_file.writer();
-
-    // TODO: Encode some more information
-
-    try binary.encode(writer, .{
-        .id = id,
-        .kind = kind,
-        .method = method,
-        .payload = payload,
-    });
-
-    // const cw = std.io.countingWriter(std.io.null_writer);
-    // try binary.encode(cw.writer(), payload);
-
-    // try binary.encode(writer, cw.bytes_written);
-    // try binary.encode(writer, payload);
+    try writer.writeAll(data);
 }
 
-// pub fn lspSendPre(
-//     conn: *Connection,
-//     comptime method: []const u8,
-//     comptime kind: lsp.MessageKind,
-//     id: ?lsp_types.RequestId,
-//     payload: lsp.Payload(method, kind),
-// ) !void {
-
-// }
+pub fn dataSend(
+    conn: *Connection,
+    data: []const u8,
+) !void {
+    const fuzzer = conn.context;
+    const writer = fuzzer.stdin_file.writer();
+    try writer.writeAll(data);
+}

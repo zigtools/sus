@@ -13,6 +13,7 @@
     "dev-null": "^0.1.1",
     "ejs": "^3.1.8",
     "express": "^4.18.2",
+    "fflate": "^0.7.4",
     "vscode-languageserver": "^8.0.2",
     "vscode-languageserver-textdocument": "^1.0.8"
   }

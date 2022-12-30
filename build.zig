@@ -39,25 +39,6 @@ pub fn build(b: *std.build.Builder) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // Log decompressor
-
-    const exe_decomp = b.addExecutable("decomp", "src/decompressor.zig");
-    exe_decomp.setTarget(target);
-    exe_decomp.setBuildMode(mode);
-    exe_decomp.install();
-
-    exe_decomp.addPackage(tres);
-    exe_decomp.addPackage(zig_lsp);
-
-    const run_cmd_decomp = exe_decomp.run();
-    run_cmd_decomp.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd_decomp.addArgs(args);
-    }
-
-    const run_step_decomp = b.step("decomp", "Run the app");
-    run_step_decomp.dependOn(&run_cmd_decomp.step);
-
     const exe_tests = b.addTest("src/main.zig");
     exe_tests.setTarget(target);
     exe_tests.setBuildMode(mode);

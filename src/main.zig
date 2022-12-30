@@ -207,7 +207,3 @@ pub fn main() !void {
         };
     }
 }
-
-test {
-    _ = @import("binary.zig");
-}
