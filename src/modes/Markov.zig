@@ -1,7 +1,5 @@
 const std = @import("std");
 const uri = @import("../uri.zig");
-const lsp = @import("../lsp.zig");
-const tres = @import("../tres.zig");
 const utils = @import("../utils.zig");
 const markov = @import("../markov.zig");
 const Fuzzer = @import("../Fuzzer.zig");

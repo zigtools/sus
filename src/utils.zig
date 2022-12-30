@@ -1,6 +1,61 @@
 const std = @import("std");
-const lsp = @import("lsp.zig");
-const tres = @import("tres.zig");
+const lsp = @import("zig-lsp");
+const lsp_types = lsp.types;
+
+/// Use after `isArrayList` and/or `isHashMap`
+pub fn isManaged(comptime T: type) bool {
+    return @hasField(T, "allocator");
+}
+
+pub fn isArrayList(comptime T: type) bool {
+    // TODO: Improve this ArrayList check, specifically by actually checking the functions we use
+    // TODO: Consider unmanaged ArrayLists
+    if (!@hasField(T, "items")) return false;
+    if (!@hasField(T, "capacity")) return false;
+
+    return true;
+}
+
+pub fn isHashMap(comptime T: type) bool {
+    // TODO: Consider unmanaged HashMaps
+
+    if (!@hasDecl(T, "KV")) return false;
+
+    if (!@hasField(T.KV, "key")) return false;
+    if (!@hasField(T.KV, "value")) return false;
+
+    const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].type;
+    const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
+
+    if (!@hasDecl(T, "put")) return false;
+
+    const put = @typeInfo(@TypeOf(T.put));
+
+    if (put != .Fn) return false;
+
+    switch (put.Fn.params.len) {
+        3 => {
+            if (put.Fn.params[0].type.? != *T) return false;
+            if (put.Fn.params[1].type.? != Key) return false;
+            if (put.Fn.params[2].type.? != Value) return false;
+        },
+        4 => {
+            if (put.Fn.params[0].type.? != *T) return false;
+            if (put.Fn.params[1].type.? != std.mem.Allocator) return false;
+            if (put.Fn.params[2].type.? != Key) return false;
+            if (put.Fn.params[3].type.? != Value) return false;
+        },
+        else => return false,
+    }
+
+    if (put.Fn.return_type == null) return false;
+
+    const put_return = @typeInfo(put.Fn.return_type.?);
+    if (put_return != .ErrorUnion) return false;
+    if (put_return.ErrorUnion.payload != void) return false;
+
+    return true;
+}
 
 pub fn randomize(
     comptime T: type,
@@ -52,10 +107,10 @@ pub fn randomize(
             }
         },
         .Struct => b: {
-            if (comptime tres.isArrayList(T)) {
+            if (comptime isArrayList(T)) {
                 return T.init(allocator);
             }
-            if (comptime tres.isHashMap(T)) {
+            if (comptime isHashMap(T)) {
                 return T.init(allocator);
             }
 
@@ -83,7 +138,7 @@ pub fn randomize(
     };
 }
 
-pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp.Position {
+pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Position {
     // TODO: Consider offsets
 
     const line_count = std.mem.count(u8, data, "\n");

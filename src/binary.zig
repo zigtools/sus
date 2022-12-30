@@ -1,64 +1,10 @@
 //! LSP binary encoding to save space
 
 const std = @import("std");
-const tres = @import("tres.zig");
-const lsp = @import("lsp.zig");
+const tres = @import("tres");
+const lsp = @import("zig-lsp");
+const lsp_types = lsp.types;
 const utils = @import("utils.zig");
-
-/// Use after `isArrayList` and/or `isHashMap`
-pub fn isManaged(comptime T: type) bool {
-    return @hasField(T, "allocator");
-}
-
-pub fn isArrayList(comptime T: type) bool {
-    // TODO: Improve this ArrayList check, specifically by actually checking the functions we use
-    // TODO: Consider unmanaged ArrayLists
-    if (!@hasField(T, "items")) return false;
-    if (!@hasField(T, "capacity")) return false;
-
-    return true;
-}
-
-pub fn isHashMap(comptime T: type) bool {
-    // TODO: Consider unmanaged HashMaps
-
-    if (!@hasDecl(T, "KV")) return false;
-
-    if (!@hasField(T.KV, "key")) return false;
-    if (!@hasField(T.KV, "value")) return false;
-
-    const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].type;
-    const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
-
-    if (!@hasDecl(T, "put")) return false;
-
-    const put = @typeInfo(@TypeOf(T.put));
-
-    if (put != .Fn) return false;
-
-    switch (put.Fn.params.len) {
-        3 => {
-            if (put.Fn.params[0].type.? != *T) return false;
-            if (put.Fn.params[1].type.? != Key) return false;
-            if (put.Fn.params[2].type.? != Value) return false;
-        },
-        4 => {
-            if (put.Fn.params[0].type.? != *T) return false;
-            if (put.Fn.params[1].type.? != std.mem.Allocator) return false;
-            if (put.Fn.params[2].type.? != Key) return false;
-            if (put.Fn.params[3].type.? != Value) return false;
-        },
-        else => return false,
-    }
-
-    if (put.Fn.return_type == null) return false;
-
-    const put_return = @typeInfo(put.Fn.return_type.?);
-    if (put_return != .ErrorUnion) return false;
-    if (put_return.ErrorUnion.payload != void) return false;
-
-    return true;
-}
 
 const NullMeaning = enum {
     /// ?T; a null leads to the field not being written
@@ -147,9 +93,9 @@ pub fn encode(writer: anytype, value: anytype) @TypeOf(writer).Error!void {
                 return value.lspBinaryEncode(writer, value);
             }
 
-            if (comptime isArrayList(T)) {
+            if (comptime utils.isArrayList(T)) {
                 try encode(writer, value.items);
-            } else if (comptime isHashMap(T)) {
+            } else if (comptime utils.isHashMap(T)) {
                 try encode(writer, value.count());
 
                 var iterator = value.iterator();
@@ -234,7 +180,7 @@ pub fn decode(
             const has_value = try decode(allocator, bool, reader);
 
             return if (has_value)
-                return try decode(allocator, o.child, reader)
+                try decode(allocator, o.child, reader)
             else
                 null;
         },
@@ -269,7 +215,7 @@ pub fn decode(
                 return T.lspBinaryDecode(allocator, reader);
             }
 
-            if (comptime isArrayList(T)) {
+            if (comptime utils.isArrayList(T)) {
                 const Child = @typeInfo(T.Slice).Pointer.child;
                 const len = try decode(allocator, usize, reader);
 
@@ -282,22 +228,22 @@ pub fn decode(
                 }
 
                 return arr;
-            } else if (comptime isHashMap(T)) {
+            } else if (comptime utils.isHashMap(T)) {
                 const Key = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "key") orelse unreachable].type;
                 const Value = std.meta.fields(T.KV)[std.meta.fieldIndex(T.KV, "value") orelse unreachable].type;
                 const len = try decode(allocator, usize, reader);
 
-                var map = if (comptime isManaged(T)) T.init(allocator) else T{};
-                if (comptime isManaged(T))
-                    try map.ensureTotalCapacity(len)
-                else
-                    try map.ensureTotalCapacity(allocator, len);
+                var map = if (comptime utils.isManaged(T)) T.init(allocator) else T{};
+                // if (comptime utils.isManaged(T))
+                //     try map.ensureTotalCapacity(len)
+                // else
+                //     try map.ensureTotalCapacity(allocator, len);
 
                 var index: usize = 0;
                 while (index < len) : (index += 1) {
                     const key = try decode(allocator, Key, reader);
                     const val = try decode(allocator, Value, reader);
-                    if (comptime isManaged(T))
+                    if (comptime utils.isManaged(T))
                         try map.put(key, val)
                     else
                         try map.put(allocator, key, val);
@@ -309,7 +255,7 @@ pub fn decode(
 
                 inline for (S.fields) |Field| {
                     // don't include void fields
-                    if (Field.type == void) continue;
+                    if (Field.type == void or Field.is_comptime) continue;
                     @field(str, Field.name) = try decode(allocator, Field.type, reader);
                 }
 
@@ -320,10 +266,12 @@ pub fn decode(
             .One => switch (@typeInfo(ptr_info.child)) {
                 .Array => {
                     const Slice = []const std.meta.Elem(ptr_info.child);
-                    return decode(allocator, Slice, reader);
+                    return try decode(allocator, Slice, reader);
                 },
                 else => {
-                    return decode(allocator, ptr_info.child, reader);
+                    var c = try allocator.create(ptr_info.child);
+                    c.* = try decode(allocator, ptr_info.child, reader);
+                    return c;
                 },
             },
             // TODO: .Many when there is a sentinel (waiting for https://github.com/ziglang/zig/pull/3972)
@@ -370,9 +318,9 @@ test {
         var c = std.ArrayListUnmanaged(u8){};
 
         var comp = try std.compress.deflate.compressor(arena.allocator(), a.writer(arena.allocator()), .{});
-        const val = try utils.randomize(lsp.ServerCapabilities, arena.allocator(), rng.random());
+        const val = try utils.randomize(lsp_types.ServerCapabilities, arena.allocator(), rng.random());
         try encode(comp.writer(), val);
-        try comp.flush();
+        try comp.close();
 
         try tres.stringify(val, .{}, b.writer(arena.allocator()));
 
@@ -380,7 +328,7 @@ test {
 
         var afbs = std.io.fixedBufferStream(a.items);
         var decomp = try std.compress.deflate.decompressor(arena.allocator(), afbs.reader(), null);
-        var decomp_res = try decode(arena.allocator(), lsp.ServerCapabilities, decomp.reader());
+        var decomp_res = try decode(arena.allocator(), lsp_types.ServerCapabilities, decomp.reader());
         try tres.stringify(decomp_res, .{}, c.writer(arena.allocator()));
 
         try std.testing.expectEqualStrings(b.items, c.items);

@@ -1,5 +1,4 @@
 const std = @import("std");
-const tres = @import("tres.zig");
 const builtin = @import("builtin");
 const Fuzzer = @import("Fuzzer.zig");
 const ChildProcess = std.ChildProcess;
@@ -182,7 +181,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
-        if (fuzzer.id == 100_000) {
+        if (fuzzer.connection.id == 100_000) {
             std.log.info("Fuzzer running too long with no result... restarting", .{});
             markov.cycle = 0;
             fuzzer.kill();

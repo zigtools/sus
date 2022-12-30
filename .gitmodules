@@ -1,0 +1,3 @@
+[submodule "libs/zig-lsp"]
+	path = libs/zig-lsp
+	url = https://github.com/ziglibs/zig-lsp
