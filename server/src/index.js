@@ -137,9 +137,15 @@ app.get("/log/:log/:kind", (req, res) => {
     const logDir = path.join(savedLogsPath, log);
     const kind = req.params.kind;
 
-    if (!fs.existsSync(logDir) || !["stderr", "stdin", "stdout"].includes(kind)) return res.status(404).end("404");
+    if (!fs.existsSync(logDir) || !["stderr", "stdin", "stdout", "principal.zig"].includes(kind)) return res.status(404).end("404");
 
     res.contentType("text");
+
+    if (kind === "principal.zig") {
+        fs.createReadStream(path.join(logDir, "principal.zig")).pipe(res);
+        return;
+    }
+
     res.setHeader("Content-Encoding", "deflate");
     fs.createReadStream(path.join(logDir, kind + ".log")).pipe(res);
 });

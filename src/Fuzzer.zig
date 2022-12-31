@@ -366,6 +366,15 @@ pub fn fuzzFeatureRandom(
 
 // Handlers
 
+pub fn @"window/logMessage"(_: *Connection, params: lsp.Params("window/logMessage")) !void {
+    // std.log.info("log message: ", .{params.})
+    switch (params.type) {
+        .Error => std.log.warn("logMessage err: {s}", .{params.message}),
+        .Warning => std.log.warn("logMessage warn: {s}", .{params.message}),
+        .Info => std.log.warn("logMessage info: {s}", .{params.message}),
+        .Log => std.log.warn("logMessage log: {s}", .{params.message}),
+    }
+}
 pub fn @"textDocument/publishDiagnostics"(_: *Connection, _: lsp.Params("textDocument/publishDiagnostics")) !void {}
 
 pub fn dataRecv(
