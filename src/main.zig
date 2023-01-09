@@ -201,7 +201,7 @@ pub fn main() !void {
             fuzzer.kill();
 
             var buf: [512]u8 = undefined;
-            const log_dir = try std.fmt.bufPrint(&buf, "saved_logs/logs-{d}", .{std.time.milliTimestamp()});
+            const log_dir = try std.fmt.bufPrint(&buf, "saved_logs/{d}", .{std.time.milliTimestamp()});
             try std.fs.cwd().rename("logs", log_dir);
             try std.fs.cwd().copyFile(principal_path, try std.fs.cwd().openDir(log_dir, .{}), "principal.zig", .{});
 

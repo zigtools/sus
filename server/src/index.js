@@ -76,7 +76,7 @@ function populateLogGroups(log) {
 function updateLogDataIndividual(log) {
     let l = {
         name: log,
-        date: new Date(+log.split("-")[1]),
+        date: new Date(+log),
     };
 
     populateStderrData(l);
@@ -93,7 +93,7 @@ function updateLogData() {
 
     let ld = fs.readdirSync(savedLogsPath).map(log => ({
         name: log,
-        date: new Date(+log.split("-")[1]),
+        date: new Date(+log),
     })).sort((a, b) => b.date - a.date);
 
     ld.map(populateStderrData);

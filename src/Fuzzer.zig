@@ -384,6 +384,7 @@ pub fn dataRecv(
     const fuzzer = conn.context;
     const writer = fuzzer.stdout_file.writer();
     try writer.writeAll(data);
+    try writer.writeAll("\n");
 }
 
 pub fn dataSend(
@@ -393,4 +394,5 @@ pub fn dataSend(
     const fuzzer = conn.context;
     const writer = fuzzer.stdin_file.writer();
     try writer.writeAll(data);
+    try writer.writeAll("\n");
 }
