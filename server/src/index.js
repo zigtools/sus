@@ -150,4 +150,4 @@ app.get("/log/:log/:kind", (req, res) => {
     fs.createReadStream(path.join(logDir, kind + ".log")).pipe(res);
 });
 
-app.listen(80);
+app.listen(1313, "127.0.0.1");
