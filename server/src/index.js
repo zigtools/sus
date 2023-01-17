@@ -83,7 +83,7 @@ function updateLogDataIndividual(log) {
     populateVersionData(l);
     populateLogGroups(l);
 
-    logData.unshift(l);
+    logData.push(l);
 }
 
 function updateLogData() {
