@@ -63,12 +63,15 @@ function populateVersionData(log) {
     }
 }
 
-function populateLogGroups(log) {
+function populateLogGroups(log, singular = false) {
     const h = hash(log.summary);
     const g = logGroups.get(h);
-    if (g)
-        g.push(log);
-    else
+    if (g) {
+        if (singular)
+            g.unshift(log);
+        else
+            g.push(log);
+    } else
         logGroups.set(h, [log]);
     logMap.set(log.name, {});
 }
@@ -81,7 +84,7 @@ function updateLogDataIndividual(log) {
 
     populateStderrData(l);
     populateVersionData(l);
-    populateLogGroups(l);
+    populateLogGroups(l, true);
 
     logData.push(l);
 }
@@ -98,7 +101,7 @@ function updateLogData() {
 
     ld.map(populateStderrData);
     ld.map(populateVersionData);
-    ld.map(populateLogGroups);
+    ld.map(z => {populateLogGroups(z);});
     logData = ld;
 }
 
