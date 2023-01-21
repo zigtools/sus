@@ -7,21 +7,23 @@ const Args = Fuzzer.Args;
 
 const Markov = @import("modes/Markov.zig");
 
-pub const log_level = std.log.Level.info;
+pub const std_options = struct {
+    pub const log_level = std.log.Level.info;
 
-pub fn log(
-    comptime level: std.log.Level,
-    comptime scope: @TypeOf(.EnumLiteral),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    if (@enumToInt(level) > @enumToInt(log_level)) return;
+    pub fn logFn(
+        comptime level: std.log.Level,
+        comptime scope: @TypeOf(.EnumLiteral),
+        comptime format: []const u8,
+        args: anytype,
+    ) void {
+        if (@enumToInt(level) > @enumToInt(log_level)) return;
 
-    const level_txt = comptime level.asText();
+        const level_txt = comptime level.asText();
 
-    std.debug.print("{d} | {s}: ({s}): ", .{ std.time.milliTimestamp(), level_txt, @tagName(scope) });
-    std.debug.print(format ++ "\n", args);
-}
+        std.debug.print("{d} | {s}: ({s}): ", .{ std.time.milliTimestamp(), level_txt, @tagName(scope) });
+        std.debug.print(format ++ "\n", args);
+    }
+};
 
 fn parseArgs(allocator: std.mem.Allocator, envmap: std.process.EnvMap) !Args {
     var argsit = try std.process.ArgIterator.initWithAllocator(allocator);
