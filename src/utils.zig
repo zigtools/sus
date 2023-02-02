@@ -160,3 +160,12 @@ pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Posit
         .character = @intCast(u32, character),
     };
 }
+
+pub fn randomRange(random: std.rand.Random, data: []const u8) lsp_types.Range {
+    var a = randomPosition(random, data);
+    var b = randomPosition(random, data);
+
+    const is_a_first = a.line < b.line or (a.line == b.line and a.character < b.character);
+
+    return if (is_a_first) .{ .start = a, .end = b } else .{ .start = b, .end = a };
+}

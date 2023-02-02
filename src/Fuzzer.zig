@@ -286,12 +286,21 @@ pub fn change(
 
 pub const WhatToFuzz = enum {
     completion,
+    declaration,
     definition,
+    type_definition,
+    implementation,
     references,
     signature_help,
     hover,
     semantic,
     document_symbol,
+    folding_range,
+    formatting,
+    document_highlight,
+    inlay_hint,
+    // selection_range,
+    rename,
 };
 
 pub fn fuzzFeatureRandom(
@@ -312,8 +321,32 @@ pub fn fuzzFeatureRandom(
                 .position = utils.randomPosition(rand, file_data),
             });
         },
+        .declaration => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/declaration", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .position = utils.randomPosition(rand, file_data),
+            });
+        },
         .definition => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/definition", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .position = utils.randomPosition(rand, file_data),
+            });
+        },
+        .type_definition => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/typeDefinition", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .position = utils.randomPosition(rand, file_data),
+            });
+        },
+        .implementation => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/implementation", .{
                 .textDocument = .{
                     .uri = file_uri,
                 },
@@ -359,6 +392,62 @@ pub fn fuzzFeatureRandom(
                 .textDocument = .{
                     .uri = file_uri,
                 },
+            });
+        },
+        .folding_range => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/foldingRange", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+            });
+        },
+        .formatting => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/formatting", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .options = .{
+                    .tabSize = 4,
+                    .insertSpaces = true,
+                },
+            });
+        },
+        .document_highlight => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/documentHighlight", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .position = utils.randomPosition(rand, file_data),
+            });
+        },
+        .inlay_hint => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/inlayHint", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .range = utils.randomRange(rand, file_data),
+            });
+        },
+        // TODO: Nest positions properly to avoid crash
+        // .selection_range => {
+        //     var positions: [16]lsp_types.Position = undefined;
+        //     for (positions) |*pos| {
+        //         pos.* = utils.randomPosition(rand, file_data);
+        //     }
+        //     _ = try fuzzer.connection.requestSync(arena, "textDocument/selectionRange", .{
+        //         .textDocument = .{
+        //             .uri = file_uri,
+        //         },
+        //         .positions = &positions,
+        //     });
+        // },
+        .rename => {
+            _ = try fuzzer.connection.requestSync(arena, "textDocument/rename", .{
+                .textDocument = .{
+                    .uri = file_uri,
+                },
+                .position = utils.randomPosition(rand, file_data),
+                .newName = "helloWorld",
             });
         },
     }
