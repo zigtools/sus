@@ -12,19 +12,16 @@ pub fn build(b: *std.build.Builder) void {
     });
     exe.install();
 
-    const tres = std.build.Pkg{
-        .name = "tres",
-        .source = .{ .path = "libs/zig-lsp/libs/tres/tres.zig" },
-    };
+    const tres_module = b.createModule(.{ .source_file = .{ .path = "libs/zig-lsp/libs/tres/tres.zig" } });
+    const zig_lsp_module = b.createModule(.{
+        .source_file = .{ .path = "libs/zig-lsp/src/zig_lsp.zig" },
+        .dependencies = &.{
+            .{ .name = "tres", .module = tres_module },
+        },
+    });
 
-    const zig_lsp = std.build.Pkg{
-        .name = "zig-lsp",
-        .source = .{ .path = "libs/zig-lsp/src/zig_lsp.zig" },
-        .dependencies = &.{tres},
-    };
-
-    exe.addPackage(tres);
-    exe.addPackage(zig_lsp);
+    exe.addModule("tres", tres_module);
+    exe.addModule("zig-lsp", zig_lsp_module);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
