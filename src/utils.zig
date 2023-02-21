@@ -129,7 +129,7 @@ pub fn randomize(
         .Enum => random.enumValue(T),
         .Union => b: {
             const selection = random.intRangeLessThan(usize, 0, @typeInfo(T).Union.fields.len);
-            inline for (@typeInfo(T).Union.fields) |field, index| {
+            inline for (@typeInfo(T).Union.fields, 0..) |field, index| {
                 if (index == selection) break :b @unionInit(T, field.name, try randomize(field.type, allocator, random));
             }
             unreachable;

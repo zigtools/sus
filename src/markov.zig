@@ -148,7 +148,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                     // TODO recovery idea - do a substring search of self.table.entries for this block
                     // with leading/trailing zeroes trimmed
                     const trimmed = std.mem.trim(u8, &block, &.{0});
-                    for (self.table.keys()) |block2, j| {
+                    for (self.table.keys(), 0..) |block2, j| {
                         if (mem.endsWith(u8, &block2, trimmed))
                             break :blk self.table.values()[j];
                     }
