@@ -1,0 +1,10 @@
+.{
+    .name = "sus",
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"zig-lsp" = .{
+            .url = "https://github.com/ziglibs/zig-lsp/archive/e22339e074af96871dce7c37c33fb7dfb836a8e5.tar.gz",
+            .hash = "12207abaeb6c320fa413b46a598dcff0e041023ab3734ff207620360e5c24969c1c2",
+        },
+    },
+}

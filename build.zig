@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub fn build(b: *std.build.Builder) void {
+    const zig_lsp = b.dependency("zig-lsp", .{}).module("zig-lsp");
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -10,18 +12,8 @@ pub fn build(b: *std.build.Builder) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.addModule("zig-lsp", zig_lsp);
     b.installArtifact(exe);
-
-    const tres_module = b.createModule(.{ .source_file = .{ .path = "libs/zig-lsp/libs/tres/tres.zig" } });
-    const zig_lsp_module = b.createModule(.{
-        .source_file = .{ .path = "libs/zig-lsp/src/zig_lsp.zig" },
-        .dependencies = &.{
-            .{ .name = "tres", .module = tres_module },
-        },
-    });
-
-    exe.addModule("tres", tres_module);
-    exe.addModule("zig-lsp", zig_lsp_module);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

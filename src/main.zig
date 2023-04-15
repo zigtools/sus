@@ -150,7 +150,7 @@ pub fn main() !void {
         std.os.exit(1);
     };
     defer args.deinit();
-    const zig_version = std.fmt.comptimePrint("{any}", .{builtin.zig_version});
+    const zig_version = comptime std.fmt.comptimePrint("{any}", .{builtin.zig_version});
 
     const vers = try ChildProcess.exec(.{
         .allocator = allocator,
