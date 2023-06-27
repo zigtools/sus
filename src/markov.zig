@@ -25,7 +25,7 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
             defer it.index += 1;
             if (it.index + len >= it.text.len) return null;
             const start = std.math.cast(usize, it.index) orelse 0;
-            const end = @bitCast(usize, it.index + len);
+            const end: usize = @bitCast(it.index + len);
             return .{
                 .int = strToInt(it.text[start..end]),
                 .next = it.text[end],
@@ -33,7 +33,7 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
         }
 
         pub fn intToBlock(int: Int) Block {
-            return @bitCast(Block, int);
+            return @bitCast(int);
         }
         pub fn strToBlock(str: []const u8) Block {
             // if (@import("builtin").mode == .Debug and str.len < len) {
@@ -47,10 +47,10 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
             return block;
         }
         pub fn strToInt(str: []const u8) Int {
-            return @bitCast(Int, strToBlock(str));
+            return @bitCast(strToBlock(str));
         }
         pub fn blockToInt(blk: Block) Int {
-            return @bitCast(Int, blk);
+            return @bitCast(blk);
         }
     };
 }
@@ -98,7 +98,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
             var iter = iterator(input);
             while (iter.next()) |it| {
                 // std.debug.print("{s}-{c}\n", .{ @bitCast(Iter.Block, it.int), it.next });
-                const block = @bitCast(Iter.Block, it.int);
+                const block: Iter.Block = @bitCast(it.int);
                 const gop = try self.table.getOrPut(self.allocator, block);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
                 gop.value_ptr.count += 1;
@@ -140,7 +140,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                 break :blk self.table.keys()[id];
             };
             _ = try writer.write(&start_block);
-            var int = @bitCast(Iter.Int, start_block);
+            var int: Iter.Int = @bitCast(start_block);
             var i: usize = 0;
             while (i < options.maxlen orelse std.math.maxInt(usize)) : (i += 1) {
                 const block = Iter.intToBlock(int);
