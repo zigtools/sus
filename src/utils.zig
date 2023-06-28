@@ -156,8 +156,8 @@ pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Posit
     }
 
     return .{
-        .line = @intCast(u32, line),
-        .character = @intCast(u32, character),
+        .line = @intCast(line),
+        .character = @intCast(character),
     };
 }
 

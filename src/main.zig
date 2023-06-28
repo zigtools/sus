@@ -16,7 +16,7 @@ pub const std_options = struct {
         comptime format: []const u8,
         args: anytype,
     ) void {
-        if (@enumToInt(level) > @enumToInt(log_level)) return;
+        if (@intFromEnum(level) > @intFromEnum(log_level)) return;
 
         const level_txt = comptime level.asText();
 
