@@ -71,13 +71,6 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         break :blk null;
     };
 
-    var deflate: bool = if (env_map.get("deflate")) |str| blk: {
-        if (std.mem.eql(u8, str, "true")) break :blk true;
-        if (std.mem.eql(u8, str, "false")) break :blk false;
-        std.log.warn("expected boolean in env option 'deflate' but got '{s}'", .{str});
-        break :blk false;
-    } else false;
-
     var cycles_per_gen: u32 = blk: {
         if (env_map.get("cycles_per_gen")) |str| {
             if (std.fmt.parseUnsigned(u32, str, 10)) |cpg| {
@@ -101,8 +94,6 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const mode_arg = arg_it.next() orelse fatal("expected mode parameter after --mode", .{});
             mode_name = std.meta.stringToEnum(ModeName, mode_arg) orelse fatal("unknown mode: {s}", .{mode_arg});
-        } else if (std.mem.eql(u8, arg, "--deflate")) {
-            deflate = true;
         } else if (std.mem.eql(u8, arg, "--cycles-per-gen")) {
             const next_arg = arg_it.next() orelse fatal("expected integer after --cycles-per-gen", .{});
             cycles_per_gen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatal("invalid integer '{s}'", .{next_arg});
@@ -127,7 +118,6 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         .zls_path = zls_path.?,
         .mode_name = mode_name.?,
         .cycles_per_gen = cycles_per_gen,
-        .deflate = deflate,
     };
 }
 
@@ -144,7 +134,6 @@ const usage =
     \\  --help                Print this help and exit
     \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
-    \\  --deflate             Compress log files with DEFLATE
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
     \\
     \\For a listing of mode specific options, use 'sus --mode [mode] -- --help'.
@@ -225,10 +214,9 @@ pub fn main() !void {
         \\zls_version:    {s}
         \\zls_path:       {s}
         \\mode:           {s}
-        \\deflate:        {}
         \\cycles-per-gen: {d}
         \\
-    , .{ builtin.zig_version_string, zls_version, config.zls_path, @tagName(config.mode_name), config.deflate, config.cycles_per_gen });
+    , .{ builtin.zig_version_string, zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
 
     var mode = try Mode.init(config.mode_name, gpa, &arg_it, env_map);
     defer mode.deinit(gpa);
