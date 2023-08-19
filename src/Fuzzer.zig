@@ -1,288 +1,241 @@
 const std = @import("std");
 const lsp = @import("zig-lsp");
-const uri = @import("uri.zig");
 const utils = @import("utils.zig");
 const lsp_types = lsp.types;
 const ChildProcess = std.ChildProcess;
+const Mode = @import("mode.zig").Mode;
+const ModeName = @import("mode.zig").ModeName;
 
 const Fuzzer = @This();
 
 pub const Connection = lsp.Connection(std.fs.File.Reader, std.fs.File.Writer, Fuzzer);
 
+pub const Config = struct {
+    zls_path: []const u8,
+    mode_name: ModeName,
+    cycles_per_gen: u32,
+    deflate: bool,
+
+    pub const Defaults = struct {
+        pub const cycles_per_gen: u32 = 25;
+    };
+
+    pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
+        allocator.free(self.zls_path);
+        self.* = undefined;
+    }
+};
+
 allocator: std.mem.Allocator,
 connection: Connection,
-proc: ChildProcess,
+mode: *Mode,
+config: Config,
+rand: std.rand.DefaultPrng,
+cycle: usize = 0,
 
-zig_version: []const u8,
-zls_version: []const u8,
-
-buf: std.ArrayListUnmanaged(u8) = .{},
-
-prng: std.rand.DefaultPrng,
-
-stdin_file: LogFile,
-stdout_file: LogFile,
-stderr_file: LogFile,
-
+zls_process: ChildProcess,
+stderr_thread_keep_running: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
 stderr_thread: std.Thread,
 
-args: Args,
-
-pub const LogFile = struct {
-    const Compressor = std.compress.deflate.Compressor(std.fs.File.Writer);
-
-    allocator: std.mem.Allocator,
-    path: []const u8,
-
-    loaded: bool = false,
-    file: std.fs.File,
-    compressor: Compressor,
-
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) !LogFile {
-        var lf = LogFile{
-            .allocator = allocator,
-            .path = path,
-
-            .file = undefined,
-            .compressor = undefined,
-        };
-        return lf;
-    }
-
-    pub fn reset(log_file: *LogFile) !void {
-        if (log_file.loaded) {
-            log_file.close();
-        }
-        log_file.file = try std.fs.cwd().createFile(log_file.path, .{});
-        log_file.compressor = try std.compress.deflate.compressor(log_file.allocator, log_file.file.writer(), .{});
-        log_file.loaded = true;
-    }
-
-    pub fn close(log_file: *LogFile) void {
-        if (!log_file.loaded) @panic("Double close");
-        log_file.compressor.close() catch @panic("Flush failure");
-        log_file.file.close();
-        log_file.loaded = false;
-        log_file.compressor.deinit();
-    }
-
-    pub fn writer(log_file: *LogFile) Compressor.Writer {
-        return log_file.compressor.writer();
-    }
-};
-
-pub const Mode = std.meta.Tag(Args.Base);
-
-pub const Args = struct {
-    argsit: std.process.ArgIterator,
-    zls_path: []const u8,
-    base: Base,
-
-    pub const MarkovArg = enum {
-        @"--maxlen",
-        @"--cycles-per-gen",
-    };
-    pub const Markov = struct {
-        training_dir: []const u8,
-        maxlen: u32 = Defaults.maxlen,
-        cycles_per_gen: u32 = Defaults.cycles_per_gen,
-
-        pub const Defaults = struct {
-            pub const maxlen = 512;
-            pub const cycles_per_gen = 25;
-        };
-    };
-
-    const Base = union(enum) {
-        markov: Markov,
-    };
-
-    pub fn format(args: Args, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = try writer.write(args.zls_path);
-        _ = try writer.write(" ");
-        _ = try writer.write(@tagName(args.base));
-        switch (args.base) {
-            .markov => |m| {
-                try writer.print(" {s} --maxlen {} --cycles-per-gen {}", .{ m.training_dir, m.maxlen, m.cycles_per_gen });
-            },
-        }
-    }
-
-    pub fn deinit(args: *Args) void {
-        args.argsit.deinit();
-    }
-};
+stdin_output: std.ArrayListUnmanaged(u8) = .{},
+stdout_output: std.ArrayListUnmanaged(u8) = .{},
+stderr_output: std.ArrayListUnmanaged(u8) = .{},
+princiapl_file_source: []const u8 = "",
+princiapl_file_uri: []const u8,
 
 pub fn create(
     allocator: std.mem.Allocator,
-    args: Args,
-    zig_version: []const u8,
-    zls_version: []const u8,
+    mode: *Mode,
+    config: Config,
 ) !*Fuzzer {
+    var fuzzer = try allocator.create(Fuzzer);
+    errdefer allocator.destroy(fuzzer);
+
     var seed: u64 = 0;
     try std.os.getrandom(std.mem.asBytes(&seed));
 
-    var fuzzer = try allocator.create(Fuzzer);
+    const cwd_path = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd_path);
+
+    const princiapl_file_path = try std.fs.path.join(allocator, &.{ cwd_path, "tmp", "principal.zig" });
+    defer allocator.free(princiapl_file_path);
+
+    const princiapl_file_uri = try std.fmt.allocPrint(allocator, "{+/}", .{std.Uri{
+        .scheme = "file",
+        .user = null,
+        .password = null,
+        .host = null,
+        .port = null,
+        .path = princiapl_file_path,
+        .query = null,
+        .fragment = null,
+    }});
+    errdefer allocator.free(princiapl_file_uri);
+
+    var env_map = if (std.process.getEnvMap(allocator)) |env_map| blk: {
+        var map: std.process.EnvMap = env_map;
+        errdefer map.deinit();
+        try map.put("", "NO_COLOR");
+        break :blk map;
+    } else |_| null;
+    defer if (env_map) |*map| map.deinit();
+
+    var zls_process = std.ChildProcess.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
+    zls_process.env_map = if (env_map) |*map| map else null;
+    zls_process.stdin_behavior = .Pipe;
+    zls_process.stderr_behavior = .Pipe;
+    zls_process.stdout_behavior = .Pipe;
+
+    try zls_process.spawn();
+    errdefer _ = zls_process.kill() catch @panic("failed to kill zls process");
 
     fuzzer.* = .{
         .allocator = allocator,
-        .connection = undefined,
-        .args = args,
-        .zig_version = zig_version,
-        .zls_version = zls_version,
-        .stdin_file = try LogFile.init(allocator, "logs/stdin.log"),
-        .stdout_file = try LogFile.init(allocator, "logs/stdout.log"),
-        .stderr_file = try LogFile.init(allocator, "logs/stderr.log"),
-        .stderr_thread = undefined,
-        .proc = undefined,
-        .prng = std.rand.DefaultPrng.init(seed),
+        .connection = undefined, // set below
+        .mode = mode,
+        .config = config,
+        .rand = std.rand.DefaultPrng.init(seed),
+        .zls_process = zls_process,
+        .stderr_thread = undefined, // set below
+        .princiapl_file_uri = princiapl_file_uri,
     };
-    try fuzzer.reset();
+
+    fuzzer.connection = Connection.init(
+        allocator,
+        zls_process.stdout.?.reader(),
+        zls_process.stdin.?.writer(),
+        fuzzer,
+    );
+
+    fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
+
     return fuzzer;
 }
 
-pub fn kill(fuzzer: *Fuzzer) void {
-    _ = fuzzer.proc.wait() catch |err| {
-        std.log.err("{s}", .{@errorName(err)});
-    };
-
+pub fn wait(fuzzer: *Fuzzer) void {
+    fuzzer.stderr_thread_keep_running.store(false, .Release);
     fuzzer.stderr_thread.join();
 
-    // merge must be here after stderr_thread.join() to avoid race
-    fuzzer.stdin_file.close();
-    fuzzer.stdout_file.close();
-    fuzzer.stderr_file.close();
-}
-
-pub fn reset(fuzzer: *Fuzzer) !void {
-    fuzzer.proc = std.ChildProcess.init(&.{ fuzzer.args.zls_path, "--enable-debug-log" }, fuzzer.allocator);
-
-    fuzzer.proc.stdin_behavior = .Pipe;
-    fuzzer.proc.stderr_behavior = .Pipe;
-    fuzzer.proc.stdout_behavior = .Pipe;
-
-    try fuzzer.proc.spawn();
-
-    try std.fs.cwd().makePath("logs");
-    try fuzzer.stdin_file.reset();
-    try fuzzer.stdout_file.reset();
-    try fuzzer.stderr_file.reset();
-
-    var info_buf: [512]u8 = undefined;
-    const sub_info_data = try std.fmt.bufPrint(&info_buf, "zig version: {s}\nzls version: {s}\n", .{ fuzzer.zig_version, fuzzer.zls_version });
-    try std.fs.cwd().writeFile("logs/info", sub_info_data);
-
-    fuzzer.connection = Connection.init(fuzzer.allocator, fuzzer.proc.stdout.?.reader(), fuzzer.proc.stdin.?.writer(), fuzzer);
-
-    fuzzer.stderr_thread = try std.Thread.spawn(.{}, readStderr, .{fuzzer});
-}
-
-pub fn deinit(fuzzer: *Fuzzer) void {
-    _ = fuzzer.proc.wait() catch |err| {
-        std.log.err("{s}", .{@errorName(err)});
+    _ = fuzzer.zls_process.wait() catch |err| {
+        std.log.err("failed to await zls process: {}", .{err});
     };
+}
 
-    fuzzer.buf.deinit(fuzzer.allocator);
+pub fn destroy(fuzzer: *Fuzzer) void {
+    const allocator = fuzzer.allocator;
 
-    fuzzer.stdin_file.close();
-    fuzzer.stderr_file.close();
-    fuzzer.stdout_file.close();
+    fuzzer.stdin_output.deinit(allocator);
+    fuzzer.stdout_output.deinit(allocator);
+    fuzzer.stderr_output.deinit(allocator);
 
-    fuzzer.stderr_thread.join();
+    allocator.free(fuzzer.princiapl_file_source);
+    allocator.free(fuzzer.princiapl_file_uri);
 
-    fuzzer.allocator.destroy(fuzzer);
+    fuzzer.connection.write_buffer.deinit(fuzzer.connection.allocator);
+    fuzzer.connection.callback_map.deinit(fuzzer.connection.allocator);
+
+    fuzzer.* = undefined;
+    allocator.destroy(fuzzer);
 }
 
 fn readStderr(fuzzer: *Fuzzer) void {
-    var buf: [std.mem.page_size]u8 = undefined;
-    while (true) {
-        const stderr = fuzzer.proc.stderr orelse break;
-        const reader = stderr.reader();
-        const amt = reader.read(&buf) catch break;
-        fuzzer.stderr_file.writer().writeAll(buf[0..amt]) catch unreachable;
-        if (fuzzer.connection.id % 1000 == 0) std.log.info("heartbeat {}", .{fuzzer.connection.id});
+    var buffer: [std.mem.page_size]u8 = undefined;
+    while (fuzzer.stderr_thread_keep_running.load(.Acquire)) {
+        const stderr = fuzzer.zls_process.stderr.?;
+        const amt = stderr.reader().read(&buffer) catch break;
+        fuzzer.stderr_output.appendSlice(fuzzer.allocator, buffer[0..amt]) catch break;
     }
 }
 
-const RequestHeader = struct {
-    content_length: usize,
-};
-
 pub fn random(fuzzer: *Fuzzer) std.rand.Random {
-    return fuzzer.prng.random();
-}
-
-pub fn closeFiles(fuzzer: *Fuzzer) void {
-    fuzzer.stdin_file.close();
-    fuzzer.stderr_file.close();
-    fuzzer.stdout_file.close();
+    return fuzzer.rand.random();
 }
 
 pub fn initCycle(fuzzer: *Fuzzer) !void {
     var arena = std.heap.ArenaAllocator.init(fuzzer.allocator);
     defer arena.deinit();
 
-    _ = try fuzzer.connection.requestSync(arena.allocator(), "initialize", .{
+    _ = try fuzzer.connection.requestSync(arena.allocator(), "initialize", lsp_types.InitializeParams{
         .capabilities = .{},
     });
     try fuzzer.connection.notify("initialized", .{});
+
+    try fuzzer.connection.notify("textDocument/didOpen", lsp_types.DidOpenTextDocumentParams{ .textDocument = .{
+        .uri = fuzzer.princiapl_file_uri,
+        .languageId = "zig",
+        .version = @intCast(fuzzer.cycle),
+        .text = fuzzer.princiapl_file_source,
+    } });
 }
 
-pub fn open(
-    fuzzer: *Fuzzer,
-    f_uri: []const u8,
-    data: []const u8,
-) !void {
-    try fuzzer.connection.notify("textDocument/didOpen", .{
-        .textDocument = .{
-            .uri = f_uri,
-            .languageId = "zig",
-            .version = 0,
-            .text = data,
-        },
+pub fn closeCycle(fuzzer: *Fuzzer) !void {
+    var arena = std.heap.ArenaAllocator.init(fuzzer.allocator);
+    defer arena.deinit();
+
+    _ = try fuzzer.connection.notify("textDocument/didClose", .{
+        .textDocument = .{ .uri = fuzzer.princiapl_file_uri },
     });
+
+    _ = try fuzzer.connection.requestSync(arena.allocator(), "shutdown", {});
+    try fuzzer.connection.notify("exit", {});
 }
 
-pub fn change(
-    fuzzer: *Fuzzer,
-    f_uri: []const u8,
-    data: []const u8,
-) !void {
-    try fuzzer.connection.notify("textDocument/didChange", .{
-        .textDocument = .{
-            .uri = f_uri,
-            .version = 0,
-        },
-        .contentChanges = &[1]lsp_types.TextDocumentContentChangeEvent{
-            .{
-                .literal_1 = .{ .text = data },
+pub fn fuzz(fuzzer: *Fuzzer) !void {
+    fuzzer.cycle += 1;
+    if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
+        while (true) {
+            fuzzer.allocator.free(fuzzer.princiapl_file_source);
+            fuzzer.princiapl_file_source = try fuzzer.mode.gen(fuzzer.allocator);
+            if (std.unicode.utf8ValidateSlice(fuzzer.princiapl_file_source)) break;
+        }
+
+        try fuzzer.connection.notify("textDocument/didChange", lsp_types.DidChangeTextDocumentParams{
+            .textDocument = .{ .uri = fuzzer.princiapl_file_uri, .version = @intCast(fuzzer.cycle) },
+            .contentChanges = &[1]lsp_types.TextDocumentContentChangeEvent{
+                .{ .literal_1 = .{ .text = fuzzer.princiapl_file_source } },
             },
-        },
-    });
+        });
+    }
+    try fuzzer.fuzzFeatureRandom(fuzzer.princiapl_file_uri, fuzzer.princiapl_file_source);
 }
 
-/// Returns opened file URI; caller owns memory
-// not used anywhere
-// pub fn openFile(fuzzer: *Fuzzer, path: []const u8) ![]const u8 {
-//     // std.debug.print("path {s}\n", .{path});
-//     // if (true) @panic("asdf");
-//     var file = try std.fs.cwd().openFile(path, .{});
-//     defer file.close();
+pub fn logPrincipal(fuzzer: *Fuzzer) !void {
+    const log_dir_path = try std.fmt.allocPrint(fuzzer.allocator, "saved_logs/{d}", .{std.time.milliTimestamp()});
+    defer fuzzer.allocator.free(log_dir_path);
 
-//     const size = (try file.stat()).size;
+    std.fs.cwd().makePath(log_dir_path) catch {};
+    var output_dir = try std.fs.cwd().openDir(log_dir_path, .{});
+    defer output_dir.close();
 
-//     try fuzzer.open_buf.ensureTotalCapacity(fuzzer.allocator, size);
-//     fuzzer.open_buf.items.len = size;
-//     _ = try file.readAll(fuzzer.open_buf.items);
+    const principal_file = try output_dir.createFile("principal.zig", .{});
+    defer principal_file.close();
 
-//     const f_uri = try uri.fromPath(fuzzer.allocator, path);
+    try principal_file.writeAll(fuzzer.princiapl_file_source);
 
-//     try fuzzer.open(f_uri, fuzzer.open_buf);
+    for (
+        [_]std.ArrayListUnmanaged(u8){ fuzzer.stdin_output, fuzzer.stdout_output, fuzzer.stderr_output },
+        [_][]const u8{ "stdin.log", "stdout.log", "stderr.log" },
+    ) |output, path| {
+        const output_file = try output_dir.createFile(path, .{});
+        defer output_file.close();
 
-//     return f_uri;
-// }
+        if (fuzzer.config.deflate) {
+            var buffered_writer = std.io.bufferedWriter(output_file.writer());
 
-// Random feature fuzzing
+            var compressor = try std.compress.deflate.compressor(
+                fuzzer.allocator,
+                buffered_writer.writer(),
+                .{ .level = .best_compression },
+            );
+            defer compressor.deinit();
+            _ = try compressor.write(output.items);
+            try compressor.flush();
+            try buffered_writer.flush();
+        } else {
+            try output_file.writeAll(output.items);
+        }
+    }
+}
 
 pub const WhatToFuzz = enum {
     completion,
@@ -305,51 +258,44 @@ pub const WhatToFuzz = enum {
 
 pub fn fuzzFeatureRandom(
     fuzzer: *Fuzzer,
-    arena: std.mem.Allocator,
     file_uri: []const u8,
     file_data: []const u8,
 ) !void {
+    var arena_allocator = std.heap.ArenaAllocator.init(fuzzer.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
     switch (wtf) {
         .completion => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/completion", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .declaration => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/declaration", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .definition => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/definition", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .type_definition => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/typeDefinition", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .implementation => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/implementation", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
@@ -358,54 +304,40 @@ pub fn fuzzFeatureRandom(
                 .context = .{
                     .includeDeclaration = rand.boolean(),
                 },
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .signature_help => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/signatureHelp", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .hover => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/hover", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .semantic => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/semanticTokens/full", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
             });
         },
         .document_symbol => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/documentSymbol", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
             });
         },
         .folding_range => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/foldingRange", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
             });
         },
         .formatting => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/formatting", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .options = .{
                     .tabSize = 4,
                     .insertSpaces = true,
@@ -414,17 +346,13 @@ pub fn fuzzFeatureRandom(
         },
         .document_highlight => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/documentHighlight", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
             });
         },
         .inlay_hint => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/inlayHint", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .range = utils.randomRange(rand, file_data),
             });
         },
@@ -435,17 +363,13 @@ pub fn fuzzFeatureRandom(
         //         pos.* = utils.randomPosition(rand, file_data);
         //     }
         //     _ = try fuzzer.connection.requestSync(arena, "textDocument/selectionRange", .{
-        //         .textDocument = .{
-        //             .uri = file_uri,
-        //         },
+        //         .textDocument = .{ .uri = file_uri, },
         //         .positions = &positions,
         //     });
         // },
         .rename => {
             _ = try fuzzer.connection.requestSync(arena, "textDocument/rename", .{
-                .textDocument = .{
-                    .uri = file_uri,
-                },
+                .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
                 .newName = "helloWorld",
             });
@@ -456,7 +380,6 @@ pub fn fuzzFeatureRandom(
 // Handlers
 
 pub fn @"window/logMessage"(_: *Connection, params: lsp.Params("window/logMessage")) !void {
-    // std.log.info("log message: ", .{params.})
     switch (params.type) {
         .Error => std.log.warn("logMessage err: {s}", .{params.message}),
         .Warning => std.log.warn("logMessage warn: {s}", .{params.message}),
@@ -470,18 +393,18 @@ pub fn dataRecv(
     conn: *Connection,
     data: []const u8,
 ) !void {
-    const fuzzer = conn.context;
-    const writer = fuzzer.stdout_file.writer();
-    try writer.writeAll(data);
-    try writer.writeAll("\n");
+    const fuzzer: *Fuzzer = conn.context;
+    try fuzzer.stdout_output.ensureUnusedCapacity(fuzzer.allocator, data.len + 1);
+    fuzzer.stdout_output.appendSliceAssumeCapacity(data);
+    fuzzer.stdout_output.appendAssumeCapacity('\n');
 }
 
 pub fn dataSend(
     conn: *Connection,
     data: []const u8,
 ) !void {
-    const fuzzer = conn.context;
-    const writer = fuzzer.stdin_file.writer();
-    try writer.writeAll(data);
-    try writer.writeAll("\n");
+    const fuzzer: *Fuzzer = conn.context;
+    try fuzzer.stdin_output.ensureUnusedCapacity(fuzzer.allocator, data.len + 1);
+    fuzzer.stdin_output.appendSliceAssumeCapacity(data);
+    fuzzer.stdin_output.appendAssumeCapacity('\n');
 }

@@ -1,3 +1,3 @@
 export PATH="$(pwd)/repos/zig:$PATH"
-zig build -Drelease-fast
+zig build -Doptimize=ReleaseSafe
 ./zig-out/bin/sus
