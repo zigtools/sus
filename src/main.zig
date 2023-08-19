@@ -90,7 +90,7 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
             try std.io.getStdErr().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
-            zls_path = arg_it.next() orelse fatal("expected file path after --zls-path", .{});
+            zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const mode_arg = arg_it.next() orelse fatal("expected mode parameter after --mode", .{});
             mode_name = std.meta.stringToEnum(ModeName, mode_arg) orelse fatal("unknown mode: {s}", .{mode_arg});
@@ -247,9 +247,7 @@ pub fn main() !void {
                 std.log.info("Restarting fuzzer...", .{});
 
                 fuzzer.wait();
-                fuzzer.logPrincipal() catch {
-                    std.log.err("failed to log principal", .{});
-                };
+                try fuzzer.logPrincipal();
                 fuzzer.destroy();
                 break;
             };

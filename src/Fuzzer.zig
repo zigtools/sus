@@ -71,16 +71,17 @@ pub fn create(
     }});
     errdefer allocator.free(principal_file_uri);
 
-    var env_map = if (std.process.getEnvMap(allocator)) |env_map| blk: {
-        var map: std.process.EnvMap = env_map;
-        errdefer map.deinit();
-        try map.put("", "NO_COLOR");
-        break :blk map;
-    } else |_| null;
-    defer if (env_map) |*map| map.deinit();
+    var env_map = try allocator.create(std.process.EnvMap);
+    env_map.* = std.process.getEnvMap(allocator) catch std.process.EnvMap.init(allocator);
+    try env_map.put("NO_COLOR", "");
+
+    defer {
+        env_map.deinit();
+        allocator.destroy(env_map);
+    }
 
     var zls_process = std.ChildProcess.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
-    zls_process.env_map = if (env_map) |*map| map else null;
+    zls_process.env_map = env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Pipe;
     zls_process.stdout_behavior = .Pipe;
@@ -199,13 +200,13 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
 }
 
 pub fn logPrincipal(fuzzer: *Fuzzer) !void {
-    var bytes: [64]u8 = undefined;
+    var bytes: [32]u8 = undefined;
     fuzzer.random().bytes(&bytes);
+
+    try std.fs.cwd().makePath("saved_logs");
 
     const log_entry_path = try std.fmt.allocPrint(fuzzer.allocator, "saved_logs/{d}", .{std.fmt.fmtSliceHexLower(&bytes)});
     defer fuzzer.allocator.free(log_entry_path);
-
-    try std.fs.cwd().makePath(log_entry_path);
 
     const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
     defer entry_file.close();
