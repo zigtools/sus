@@ -9,13 +9,11 @@ export PATH="$(pwd)/repos/zig:$PATH"
 
 # Install zls
 rm -rf repos/zls
-git clone --recurse-submodules https://github.com/zigtools/zls repos/zls
+git clone https://github.com/zigtools/zls repos/zls
 cd repos/zls
 zig build
 cd ../..
 
 # Pull latest fuzzer
 git pull
-git submodule update --init --recursive
-git submodule update --remote --recursive
-zig build -Drelease-fast
+zig build -Doptimize=ReleaseSafe

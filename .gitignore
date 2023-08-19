@@ -1,9 +1,7 @@
 /zig-out
 /zig-cache
-/logs
 /saved_logs
 /repos
-/staging/markov/*.zig
 node_modules
 /.env
 d_*.log
