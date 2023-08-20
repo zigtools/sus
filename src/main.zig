@@ -46,7 +46,7 @@ fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return envmap;
 }
 
-fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
+fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
     _ = arg_it.next() orelse @panic("");
 
     var zls_path: ?[]const u8 = blk: {
@@ -114,10 +114,25 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         fatalWithUsage("must specify --mode", .{});
     }
 
+    const zls_version = blk: {
+        const vers = try std.ChildProcess.exec(.{
+            .allocator = allocator,
+            .argv = &.{ zls_path.?, "--version" },
+        });
+        defer allocator.free(vers.stdout);
+        defer allocator.free(vers.stderr);
+        break :blk try allocator.dupe(u8, std.mem.trim(u8, vers.stdout, &std.ascii.whitespace));
+    };
+
     return .{
         .zls_path = zls_path.?,
         .mode_name = mode_name.?,
         .cycles_per_gen = cycles_per_gen,
+
+        // TODO: Get version from Zig executable ZLS uses,
+        // not the executable the fuzzer was compiled with.
+        .zig_version = try allocator.dupe(u8, builtin.zig_version_string),
+        .zls_version = zls_version,
     };
 }
 
@@ -195,19 +210,8 @@ pub fn main() !void {
     var arg_it = try std.process.ArgIterator.initWithAllocator(gpa);
     defer arg_it.deinit();
 
-    var config = try parseArgs(gpa, env_map, &arg_it);
+    var config = try initConfig(gpa, env_map, &arg_it);
     defer config.deinit(gpa);
-
-    const zls_version = blk: {
-        const vers = try std.ChildProcess.exec(.{
-            .allocator = gpa,
-            .argv = &.{ config.zls_path, "--version" },
-        });
-        defer gpa.free(vers.stdout);
-        defer gpa.free(vers.stderr);
-        break :blk try gpa.dupe(u8, std.mem.trim(u8, vers.stdout, &std.ascii.whitespace));
-    };
-    defer gpa.free(zls_version);
 
     try stderr.print(
         \\zig_version:    {s}
@@ -216,7 +220,7 @@ pub fn main() !void {
         \\mode:           {s}
         \\cycles-per-gen: {d}
         \\
-    , .{ builtin.zig_version_string, zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
+    , .{ config.zig_version, config.zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
 
     var mode = try Mode.init(config.mode_name, gpa, &arg_it, env_map);
     defer mode.deinit(gpa);

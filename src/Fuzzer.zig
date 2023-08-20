@@ -15,12 +15,17 @@ pub const Config = struct {
     mode_name: ModeName,
     cycles_per_gen: u32,
 
+    zig_version: []const u8,
+    zls_version: []const u8,
+
     pub const Defaults = struct {
         pub const cycles_per_gen: u32 = 25;
     };
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.zls_path);
+        allocator.free(self.zig_version);
+        allocator.free(self.zls_version);
         self.* = undefined;
     }
 };
@@ -211,21 +216,27 @@ pub fn logPrincipal(fuzzer: *Fuzzer) !void {
     const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
     defer entry_file.close();
 
-    var sizes: [4 * 8]u8 = undefined;
-    var sizes_fbs = std.io.fixedBufferStream(&sizes);
-
-    sizes_fbs.writer().writeIntLittle(u64, fuzzer.principal_file_source.len) catch unreachable;
-    sizes_fbs.writer().writeIntLittle(u64, fuzzer.stdin_output.items.len) catch unreachable;
-    sizes_fbs.writer().writeIntLittle(u64, fuzzer.stdout_output.items.len) catch unreachable;
-    sizes_fbs.writer().writeIntLittle(u64, fuzzer.stderr_output.items.len) catch unreachable;
-
-    var iovecs: [5]std.os.iovec_const = undefined;
+    var iovecs: [13]std.os.iovec_const = undefined;
 
     for ([_][]const u8{
-        &sizes,
+        std.mem.asBytes(&std.time.milliTimestamp()),
+
+        std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
+        fuzzer.config.zig_version,
+
+        std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
+        fuzzer.config.zls_version,
+
+        std.mem.asBytes(&@as(u32, @intCast(fuzzer.principal_file_source.len))),
         fuzzer.principal_file_source,
+
+        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdin_output.items.len))),
         fuzzer.stdin_output.items,
+
+        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdout_output.items.len))),
         fuzzer.stdout_output.items,
+
+        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stderr_output.items.len))),
         fuzzer.stderr_output.items,
     }, 0..) |val, i| {
         iovecs[i] = .{
