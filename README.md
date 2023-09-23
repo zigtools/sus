@@ -20,7 +20,6 @@ General Options:
   --help                Print this help and exit
   --zls-path [path]     Specify path to ZLS executable
   --mode [mode]         Specify fuzzing mode - one of { best_behavior, markov }
-  --deflate             Compress log files with DEFLATE
   --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: 25)
 
 For a listing of mode specific options, use 'sus --mode [mode] -- --help'.

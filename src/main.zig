@@ -46,7 +46,7 @@ fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return envmap;
 }
 
-fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
+fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
     _ = arg_it.next() orelse @panic("");
 
     var zls_path: ?[]const u8 = blk: {
@@ -56,6 +56,15 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         break :blk findInPath(allocator, env_map, "zls");
     };
     errdefer if (zls_path) |path| allocator.free(path);
+
+    var output_as_dir =
+        if (env_map.get("output_as_dir")) |str|
+        if (std.mem.eql(u8, str, "false"))
+            false
+        else
+            true
+    else
+        Fuzzer.Config.Defaults.output_as_dir;
 
     var mode_name: ?ModeName = blk: {
         if (env_map.get("mode")) |mode_name| {
@@ -70,13 +79,6 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         }
         break :blk null;
     };
-
-    var deflate: bool = if (env_map.get("deflate")) |str| blk: {
-        if (std.mem.eql(u8, str, "true")) break :blk true;
-        if (std.mem.eql(u8, str, "false")) break :blk false;
-        std.log.warn("expected boolean in env option 'deflate' but got '{s}'", .{str});
-        break :blk false;
-    } else false;
 
     var cycles_per_gen: u32 = blk: {
         if (env_map.get("cycles_per_gen")) |str| {
@@ -96,13 +98,13 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         if (std.mem.eql(u8, arg, "--help")) {
             try std.io.getStdErr().writeAll(usage);
             std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "--output-as-dir")) {
+            output_as_dir = true;
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
-            zls_path = arg_it.next() orelse fatal("expected file path after --zls-path", .{});
+            zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const mode_arg = arg_it.next() orelse fatal("expected mode parameter after --mode", .{});
             mode_name = std.meta.stringToEnum(ModeName, mode_arg) orelse fatal("unknown mode: {s}", .{mode_arg});
-        } else if (std.mem.eql(u8, arg, "--deflate")) {
-            deflate = true;
         } else if (std.mem.eql(u8, arg, "--cycles-per-gen")) {
             const next_arg = arg_it.next() orelse fatal("expected integer after --cycles-per-gen", .{});
             cycles_per_gen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatal("invalid integer '{s}'", .{next_arg});
@@ -123,11 +125,26 @@ fn parseArgs(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: 
         fatalWithUsage("must specify --mode", .{});
     }
 
+    const zls_version = blk: {
+        const vers = try std.ChildProcess.exec(.{
+            .allocator = allocator,
+            .argv = &.{ zls_path.?, "--version" },
+        });
+        defer allocator.free(vers.stdout);
+        defer allocator.free(vers.stderr);
+        break :blk try allocator.dupe(u8, std.mem.trim(u8, vers.stdout, &std.ascii.whitespace));
+    };
+
     return .{
+        .output_as_dir = output_as_dir,
         .zls_path = zls_path.?,
         .mode_name = mode_name.?,
         .cycles_per_gen = cycles_per_gen,
-        .deflate = deflate,
+
+        // TODO: Get version from Zig executable ZLS uses,
+        // not the executable the fuzzer was compiled with.
+        .zig_version = try allocator.dupe(u8, builtin.zig_version_string),
+        .zls_version = zls_version,
     };
 }
 
@@ -142,9 +159,9 @@ const usage =
     \\
     \\General Options:
     \\  --help                Print this help and exit
+    \\  --output-as-dir       Output fuzzing results as directories
     \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
-    \\  --deflate             Compress log files with DEFLATE
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
     \\
     \\For a listing of mode specific options, use 'sus --mode [mode] -- --help'.
@@ -206,29 +223,17 @@ pub fn main() !void {
     var arg_it = try std.process.ArgIterator.initWithAllocator(gpa);
     defer arg_it.deinit();
 
-    var config = try parseArgs(gpa, env_map, &arg_it);
+    var config = try initConfig(gpa, env_map, &arg_it);
     defer config.deinit(gpa);
-
-    const zls_version = blk: {
-        const vers = try std.ChildProcess.exec(.{
-            .allocator = gpa,
-            .argv = &.{ config.zls_path, "--version" },
-        });
-        defer gpa.free(vers.stdout);
-        defer gpa.free(vers.stderr);
-        break :blk try gpa.dupe(u8, std.mem.trim(u8, vers.stdout, &std.ascii.whitespace));
-    };
-    defer gpa.free(zls_version);
 
     try stderr.print(
         \\zig_version:    {s}
         \\zls_version:    {s}
         \\zls_path:       {s}
         \\mode:           {s}
-        \\deflate:        {}
         \\cycles-per-gen: {d}
         \\
-    , .{ builtin.zig_version_string, zls_version, config.zls_path, @tagName(config.mode_name), config.deflate, config.cycles_per_gen });
+    , .{ config.zig_version, config.zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
 
     var mode = try Mode.init(config.mode_name, gpa, &arg_it, env_map);
     defer mode.deinit(gpa);

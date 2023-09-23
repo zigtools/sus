@@ -11,17 +11,23 @@ const Fuzzer = @This();
 pub const Connection = lsp.Connection(std.fs.File.Reader, std.fs.File.Writer, Fuzzer);
 
 pub const Config = struct {
+    output_as_dir: bool,
     zls_path: []const u8,
     mode_name: ModeName,
     cycles_per_gen: u32,
-    deflate: bool,
+
+    zig_version: []const u8,
+    zls_version: []const u8,
 
     pub const Defaults = struct {
+        pub const output_as_dir = false;
         pub const cycles_per_gen: u32 = 25;
     };
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.zls_path);
+        allocator.free(self.zig_version);
+        allocator.free(self.zls_version);
         self.* = undefined;
     }
 };
@@ -40,8 +46,8 @@ stderr_thread: std.Thread,
 stdin_output: std.ArrayListUnmanaged(u8) = .{},
 stdout_output: std.ArrayListUnmanaged(u8) = .{},
 stderr_output: std.ArrayListUnmanaged(u8) = .{},
-princiapl_file_source: []const u8 = "",
-princiapl_file_uri: []const u8,
+principal_file_source: []const u8 = "",
+principal_file_uri: []const u8,
 
 pub fn create(
     allocator: std.mem.Allocator,
@@ -57,31 +63,32 @@ pub fn create(
     const cwd_path = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd_path);
 
-    const princiapl_file_path = try std.fs.path.join(allocator, &.{ cwd_path, "tmp", "principal.zig" });
-    defer allocator.free(princiapl_file_path);
+    const principal_file_path = try std.fs.path.join(allocator, &.{ cwd_path, "tmp", "principal.zig" });
+    defer allocator.free(principal_file_path);
 
-    const princiapl_file_uri = try std.fmt.allocPrint(allocator, "{+/}", .{std.Uri{
+    const principal_file_uri = try std.fmt.allocPrint(allocator, "{+/}", .{std.Uri{
         .scheme = "file",
         .user = null,
         .password = null,
         .host = null,
         .port = null,
-        .path = princiapl_file_path,
+        .path = principal_file_path,
         .query = null,
         .fragment = null,
     }});
-    errdefer allocator.free(princiapl_file_uri);
+    errdefer allocator.free(principal_file_uri);
 
-    var env_map = if (std.process.getEnvMap(allocator)) |env_map| blk: {
-        var map: std.process.EnvMap = env_map;
-        errdefer map.deinit();
-        try map.put("", "NO_COLOR");
-        break :blk map;
-    } else |_| null;
-    defer if (env_map) |*map| map.deinit();
+    var env_map = try allocator.create(std.process.EnvMap);
+    env_map.* = std.process.getEnvMap(allocator) catch std.process.EnvMap.init(allocator);
+    try env_map.put("NO_COLOR", "");
+
+    defer {
+        env_map.deinit();
+        allocator.destroy(env_map);
+    }
 
     var zls_process = std.ChildProcess.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
-    zls_process.env_map = if (env_map) |*map| map else null;
+    zls_process.env_map = env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Pipe;
     zls_process.stdout_behavior = .Pipe;
@@ -97,7 +104,7 @@ pub fn create(
         .rand = std.rand.DefaultPrng.init(seed),
         .zls_process = zls_process,
         .stderr_thread = undefined, // set below
-        .princiapl_file_uri = princiapl_file_uri,
+        .principal_file_uri = principal_file_uri,
     };
 
     fuzzer.connection = Connection.init(
@@ -128,8 +135,8 @@ pub fn destroy(fuzzer: *Fuzzer) void {
     fuzzer.stdout_output.deinit(allocator);
     fuzzer.stderr_output.deinit(allocator);
 
-    allocator.free(fuzzer.princiapl_file_source);
-    allocator.free(fuzzer.princiapl_file_uri);
+    allocator.free(fuzzer.principal_file_source);
+    allocator.free(fuzzer.principal_file_uri);
 
     fuzzer.connection.write_buffer.deinit(fuzzer.connection.allocator);
     fuzzer.connection.callback_map.deinit(fuzzer.connection.allocator);
@@ -161,10 +168,10 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
     try fuzzer.connection.notify("initialized", .{});
 
     try fuzzer.connection.notify("textDocument/didOpen", lsp_types.DidOpenTextDocumentParams{ .textDocument = .{
-        .uri = fuzzer.princiapl_file_uri,
+        .uri = fuzzer.principal_file_uri,
         .languageId = "zig",
         .version = @intCast(fuzzer.cycle),
-        .text = fuzzer.princiapl_file_source,
+        .text = fuzzer.principal_file_source,
     } });
 }
 
@@ -173,7 +180,7 @@ pub fn closeCycle(fuzzer: *Fuzzer) !void {
     defer arena.deinit();
 
     _ = try fuzzer.connection.notify("textDocument/didClose", .{
-        .textDocument = .{ .uri = fuzzer.princiapl_file_uri },
+        .textDocument = .{ .uri = fuzzer.principal_file_uri },
     });
 
     _ = try fuzzer.connection.requestSync(arena.allocator(), "shutdown", {});
@@ -184,56 +191,84 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
     fuzzer.cycle += 1;
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
         while (true) {
-            fuzzer.allocator.free(fuzzer.princiapl_file_source);
-            fuzzer.princiapl_file_source = try fuzzer.mode.gen(fuzzer.allocator);
-            if (std.unicode.utf8ValidateSlice(fuzzer.princiapl_file_source)) break;
+            fuzzer.allocator.free(fuzzer.principal_file_source);
+            fuzzer.principal_file_source = try fuzzer.mode.gen(fuzzer.allocator);
+            if (std.unicode.utf8ValidateSlice(fuzzer.principal_file_source)) break;
         }
 
         try fuzzer.connection.notify("textDocument/didChange", lsp_types.DidChangeTextDocumentParams{
-            .textDocument = .{ .uri = fuzzer.princiapl_file_uri, .version = @intCast(fuzzer.cycle) },
+            .textDocument = .{ .uri = fuzzer.principal_file_uri, .version = @intCast(fuzzer.cycle) },
             .contentChanges = &[1]lsp_types.TextDocumentContentChangeEvent{
-                .{ .literal_1 = .{ .text = fuzzer.princiapl_file_source } },
+                .{ .literal_1 = .{ .text = fuzzer.principal_file_source } },
             },
         });
     }
-    try fuzzer.fuzzFeatureRandom(fuzzer.princiapl_file_uri, fuzzer.princiapl_file_source);
+    try fuzzer.fuzzFeatureRandom(fuzzer.principal_file_uri, fuzzer.principal_file_source);
 }
 
 pub fn logPrincipal(fuzzer: *Fuzzer) !void {
-    const log_dir_path = try std.fmt.allocPrint(fuzzer.allocator, "saved_logs/{d}", .{std.time.milliTimestamp()});
-    defer fuzzer.allocator.free(log_dir_path);
+    var bytes: [32]u8 = undefined;
+    fuzzer.random().bytes(&bytes);
 
-    std.fs.cwd().makePath(log_dir_path) catch {};
-    var output_dir = try std.fs.cwd().openDir(log_dir_path, .{});
-    defer output_dir.close();
+    try std.fs.cwd().makePath("saved_logs");
 
-    const principal_file = try output_dir.createFile("principal.zig", .{});
-    defer principal_file.close();
+    const log_entry_path = try std.fmt.allocPrint(fuzzer.allocator, "saved_logs/{d}", .{std.fmt.fmtSliceHexLower(&bytes)});
+    defer fuzzer.allocator.free(log_entry_path);
 
-    try principal_file.writeAll(fuzzer.princiapl_file_source);
+    if (fuzzer.config.output_as_dir) {
+        try std.fs.cwd().makeDir(log_entry_path);
 
-    for (
-        [_]std.ArrayListUnmanaged(u8){ fuzzer.stdin_output, fuzzer.stdout_output, fuzzer.stderr_output },
-        [_][]const u8{ "stdin.log", "stdout.log", "stderr.log" },
-    ) |output, path| {
-        const output_file = try output_dir.createFile(path, .{});
-        defer output_file.close();
+        var entry_dir = try std.fs.cwd().openDir(log_entry_path, .{});
+        defer entry_dir.close();
 
-        if (fuzzer.config.deflate) {
-            var buffered_writer = std.io.bufferedWriter(output_file.writer());
+        const principal_file = try entry_dir.createFile("principal.zig", .{});
+        defer principal_file.close();
 
-            var compressor = try std.compress.deflate.compressor(
-                fuzzer.allocator,
-                buffered_writer.writer(),
-                .{ .level = .best_compression },
-            );
-            defer compressor.deinit();
-            _ = try compressor.write(output.items);
-            try compressor.flush();
-            try buffered_writer.flush();
-        } else {
+        try principal_file.writeAll(fuzzer.principal_file_source);
+
+        for (
+            [_]std.ArrayListUnmanaged(u8){ fuzzer.stdin_output, fuzzer.stdout_output, fuzzer.stderr_output },
+            [_][]const u8{ "stdin.log", "stdout.log", "stderr.log" },
+        ) |output, path| {
+            const output_file = try entry_dir.createFile(path, .{});
+            defer output_file.close();
+
             try output_file.writeAll(output.items);
         }
+    } else {
+        const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
+        defer entry_file.close();
+
+        var iovecs: [13]std.os.iovec_const = undefined;
+
+        for ([_][]const u8{
+            std.mem.asBytes(&std.time.milliTimestamp()),
+
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
+            fuzzer.config.zig_version,
+
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
+            fuzzer.config.zls_version,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.principal_file_source.len))),
+            fuzzer.principal_file_source,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdin_output.items.len))),
+            fuzzer.stdin_output.items,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdout_output.items.len))),
+            fuzzer.stdout_output.items,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stderr_output.items.len))),
+            fuzzer.stderr_output.items,
+        }, 0..) |val, i| {
+            iovecs[i] = .{
+                .iov_base = val.ptr,
+                .iov_len = val.len,
+            };
+        }
+
+        try entry_file.writevAll(&iovecs);
     }
 }
 
