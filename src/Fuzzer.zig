@@ -11,6 +11,7 @@ const Fuzzer = @This();
 pub const Connection = lsp.Connection(std.fs.File.Reader, std.fs.File.Writer, Fuzzer);
 
 pub const Config = struct {
+    output_as_dir: bool,
     zls_path: []const u8,
     mode_name: ModeName,
     cycles_per_gen: u32,
@@ -19,6 +20,7 @@ pub const Config = struct {
     zls_version: []const u8,
 
     pub const Defaults = struct {
+        pub const output_as_dir = false;
         pub const cycles_per_gen: u32 = 25;
     };
 
@@ -213,39 +215,61 @@ pub fn logPrincipal(fuzzer: *Fuzzer) !void {
     const log_entry_path = try std.fmt.allocPrint(fuzzer.allocator, "saved_logs/{d}", .{std.fmt.fmtSliceHexLower(&bytes)});
     defer fuzzer.allocator.free(log_entry_path);
 
-    const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
-    defer entry_file.close();
+    if (fuzzer.config.output_as_dir) {
+        try std.fs.cwd().makeDir(log_entry_path);
 
-    var iovecs: [13]std.os.iovec_const = undefined;
+        var entry_dir = try std.fs.cwd().openDir(log_entry_path, .{});
+        defer entry_dir.close();
 
-    for ([_][]const u8{
-        std.mem.asBytes(&std.time.milliTimestamp()),
+        const principal_file = try entry_dir.createFile("principal.zig", .{});
+        defer principal_file.close();
 
-        std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
-        fuzzer.config.zig_version,
+        try principal_file.writeAll(fuzzer.principal_file_source);
 
-        std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
-        fuzzer.config.zls_version,
+        for (
+            [_]std.ArrayListUnmanaged(u8){ fuzzer.stdin_output, fuzzer.stdout_output, fuzzer.stderr_output },
+            [_][]const u8{ "stdin.log", "stdout.log", "stderr.log" },
+        ) |output, path| {
+            const output_file = try entry_dir.createFile(path, .{});
+            defer output_file.close();
 
-        std.mem.asBytes(&@as(u32, @intCast(fuzzer.principal_file_source.len))),
-        fuzzer.principal_file_source,
+            try output_file.writeAll(output.items);
+        }
+    } else {
+        const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
+        defer entry_file.close();
 
-        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdin_output.items.len))),
-        fuzzer.stdin_output.items,
+        var iovecs: [13]std.os.iovec_const = undefined;
 
-        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdout_output.items.len))),
-        fuzzer.stdout_output.items,
+        for ([_][]const u8{
+            std.mem.asBytes(&std.time.milliTimestamp()),
 
-        std.mem.asBytes(&@as(u32, @intCast(fuzzer.stderr_output.items.len))),
-        fuzzer.stderr_output.items,
-    }, 0..) |val, i| {
-        iovecs[i] = .{
-            .iov_base = val.ptr,
-            .iov_len = val.len,
-        };
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
+            fuzzer.config.zig_version,
+
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
+            fuzzer.config.zls_version,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.principal_file_source.len))),
+            fuzzer.principal_file_source,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdin_output.items.len))),
+            fuzzer.stdin_output.items,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stdout_output.items.len))),
+            fuzzer.stdout_output.items,
+
+            std.mem.asBytes(&@as(u32, @intCast(fuzzer.stderr_output.items.len))),
+            fuzzer.stderr_output.items,
+        }, 0..) |val, i| {
+            iovecs[i] = .{
+                .iov_base = val.ptr,
+                .iov_len = val.len,
+            };
+        }
+
+        try entry_file.writevAll(&iovecs);
     }
-
-    try entry_file.writevAll(&iovecs);
 }
 
 pub const WhatToFuzz = enum {

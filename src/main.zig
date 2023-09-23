@@ -57,6 +57,15 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
     errdefer if (zls_path) |path| allocator.free(path);
 
+    var output_as_dir =
+        if (env_map.get("output_as_dir")) |str|
+        if (std.mem.eql(u8, str, "false"))
+            false
+        else
+            true
+    else
+        Fuzzer.Config.Defaults.output_as_dir;
+
     var mode_name: ?ModeName = blk: {
         if (env_map.get("mode")) |mode_name| {
             if (std.meta.stringToEnum(ModeName, mode_name)) |mode| {
@@ -89,6 +98,8 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (std.mem.eql(u8, arg, "--help")) {
             try std.io.getStdErr().writeAll(usage);
             std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "--output-as-dir")) {
+            output_as_dir = true;
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
             zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
         } else if (std.mem.eql(u8, arg, "--mode")) {
@@ -125,6 +136,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
 
     return .{
+        .output_as_dir = output_as_dir,
         .zls_path = zls_path.?,
         .mode_name = mode_name.?,
         .cycles_per_gen = cycles_per_gen,
@@ -147,6 +159,7 @@ const usage =
     \\
     \\General Options:
     \\  --help                Print this help and exit
+    \\  --output-as-dir       Output fuzzing results as directories
     \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
@@ -251,7 +264,9 @@ pub fn main() !void {
                 std.log.info("Restarting fuzzer...", .{});
 
                 fuzzer.wait();
-                try fuzzer.logPrincipal();
+                fuzzer.logPrincipal() catch {
+                    std.log.err("failed to log principal", .{});
+                };
                 fuzzer.destroy();
                 break;
             };
