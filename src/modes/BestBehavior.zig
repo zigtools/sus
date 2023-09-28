@@ -51,6 +51,13 @@ pub fn init(
         fatal("missing mode argument '--source_dir'", .{});
     }
 
+    progress.log(
+        \\
+        \\source_dir:     {s}
+        \\
+        \\
+    , .{source_dir.?});
+
     var progress_node = progress.start("best behavior: loading files", 0);
     defer progress_node.end();
 

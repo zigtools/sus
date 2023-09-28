@@ -66,6 +66,14 @@ pub fn init(
         fatal("missing mode argument '--training-dir'", .{});
     }
 
+    progress.log(
+        \\
+        \\training_dir:   {s}
+        \\maxlen:         {d}
+        \\
+        \\
+    , .{ training_dir.?, mm.maxlen });
+
     var progress_node = progress.start("markov: feeding model", 0);
     defer progress_node.end();
 
