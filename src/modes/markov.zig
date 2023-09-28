@@ -181,7 +181,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         pub fn prep(self: *Self) void {
             // sort each follow map by frequency descending so that more frequent come first
             for (self.table.values()) |*follows|
-                std.mem.sort(Follows.Item, follows.items(), {}, Follows.lessThanByCount);
+                mem.sortUnstable(Follows.Item, follows.items(), {}, Follows.lessThanByCount);
         }
 
         pub const GenOptions = struct {
