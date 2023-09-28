@@ -48,6 +48,13 @@ pub fn init(
 
     var training_dir: ?[]const u8 = envmap.get("markov_training_dir");
 
+    if (envmap.get("markov_maxlen")) |str| {
+        mm.maxlen = std.fmt.parseUnsigned(u32, str, 10) catch |err| blk: {
+            std.log.warn("expected unsigned integer in env option 'markov_maxlen' but got '{s}': {}", .{ str, err });
+            break :blk Defaults.maxlen;
+        };
+    }
+
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             // TODO
