@@ -55,9 +55,16 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
     };
 }
 
-pub const Follows = struct {
-    map: Map = .{},
-    count: usize = 0,
+pub const Follows = union(enum) {
+    /// special case for low number of items
+    sso: std.BoundedArray(Item, sso_size),
+    large: struct {
+        map: Map = .{},
+        count: usize = 0,
+    },
+
+    pub const empty = Follows{ .sso = .{} };
+    pub const sso_size = 8;
 
     pub const Map = std.ArrayListUnmanaged(Item);
     pub const Item = packed struct {
@@ -69,6 +76,74 @@ pub const Follows = struct {
     };
     pub fn lessThanByCount(_: void, a: Item, b: Item) bool {
         return b.count < a.count;
+    }
+
+    pub fn deinit(self: *Follows, allocator: mem.Allocator) void {
+        switch (self.*) {
+            .sso => {},
+            .large => |*payload| payload.map.deinit(allocator),
+        }
+    }
+
+    pub fn items(self: *Follows) []Item {
+        switch (self.*) {
+            .sso => |*array| return array.slice(),
+            .large => |payload| return payload.map.items,
+        }
+    }
+
+    pub fn constItems(self: *const Follows) []const Item {
+        switch (self.*) {
+            .sso => |*array| return array.constSlice(),
+            .large => |payload| return payload.map.items,
+        }
+    }
+
+    pub fn count(self: Follows) usize {
+        switch (self) {
+            .sso => |array| {
+                var result: usize = 0;
+                for (array.constSlice()) |item| {
+                    result += item.count;
+                }
+                return result;
+            },
+            .large => |payload| return payload.count,
+        }
+    }
+
+    pub fn addItem(self: *Follows, char: u8, allocator: mem.Allocator) error{OutOfMemory}!void {
+        for (self.items()) |*item| {
+            if (item.char == char) {
+                item.count += 1;
+                switch (self.*) {
+                    .sso => {},
+                    .large => |*payload| payload.count += 1,
+                }
+                return;
+            }
+        }
+
+        const new_item = Item{ .char = char, .count = 1 };
+        switch (self.*) {
+            .sso => |*array| {
+                array.append(new_item) catch {
+                    // convert small size optimization state into large
+                    var map = try std.ArrayListUnmanaged(Item).initCapacity(allocator, sso_size + 1);
+                    map.appendSliceAssumeCapacity(array.slice());
+                    map.appendAssumeCapacity(new_item);
+                    const new_state = Follows{ .large = .{
+                        .map = map,
+                        .count = self.count() + 1,
+                    } };
+                    self.* = new_state;
+                };
+            },
+            .large => |*payload| {
+                try payload.map.append(allocator, new_item);
+                payload.count += 1;
+            },
+        }
     }
 };
 
@@ -87,7 +162,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         }
         pub fn deinit(self: *Self, allocator: mem.Allocator) void {
             var iter = self.table.iterator();
-            while (iter.next()) |*m| m.value_ptr.map.deinit(allocator);
+            while (iter.next()) |*m| m.value_ptr.deinit(allocator);
             self.table.deinit(allocator);
         }
         pub fn iterator(text: []const u8) Iter {
@@ -99,21 +174,14 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
             while (iter.next()) |it| {
                 // std.debug.print("{s}-{c}\n", .{ @bitCast(Iter.Block, it.int), it.next });
                 const block: Iter.Block = @bitCast(it.int);
-                const gop = try self.table.getOrPut(self.allocator, block);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                gop.value_ptr.count += 1;
-                for (gop.value_ptr.map.items) |*it2| {
-                    if (it2.char == it.next) {
-                        it2.count += 1;
-                        break;
-                    }
-                } else try gop.value_ptr.map.append(self.allocator, .{ .char = it.next, .count = 1 });
+                const gop = try self.table.getOrPutValue(self.allocator, block, Follows.empty);
+                try gop.value_ptr.addItem(it.next, self.allocator);
             }
         }
         pub fn prep(self: *Self) void {
             // sort each follow map by frequency descending so that more frequent come first
-            for (self.table.values()) |follows|
-                std.mem.sort(Follows.Item, follows.map.items, {}, Follows.lessThanByCount);
+            for (self.table.values()) |*follows|
+                std.mem.sort(Follows.Item, follows.items(), {}, Follows.lessThanByCount);
         }
 
         pub const GenOptions = struct {
@@ -159,12 +227,12 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                 };
 
                 // pick a random item
-                var r = self.rand.intRangeAtMost(usize, 0, follows.count);
-                const first_follow = follows.map.items[0];
+                var r = self.rand.intRangeAtMost(usize, 0, follows.count());
+                const first_follow = follows.constItems()[0];
                 var c = first_follow.char;
-                if (debug) std.debug.print("follows {any} r {}\n", .{ follows.map.items, r });
+                if (debug) std.debug.print("follows {any} r {}\n", .{ follows.constItems(), r });
                 r -|= first_follow.count;
-                for (follows.map.items[1..]) |mit| {
+                for (follows.constItems()[1..]) |mit| {
                     if (r == 0) break;
                     r -|= mit.count;
                     c = mit.char;
