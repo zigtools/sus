@@ -34,6 +34,7 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 
 pub fn init(
     allocator: std.mem.Allocator,
+    progress: *std.Progress,
     arg_it: *std.process.ArgIterator,
     envmap: std.process.EnvMap,
 ) !*Markov {
@@ -72,8 +73,23 @@ pub fn init(
         fatal("missing mode argument '--training-dir'", .{});
     }
 
+    var progress_node = progress.start("markov: feeding model", 0);
+    defer progress_node.end();
+
     var iterable_dir = try std.fs.cwd().openIterableDir(training_dir.?, .{});
     defer iterable_dir.close();
+
+    {
+        var walker = try iterable_dir.walk(allocator);
+        defer walker.deinit();
+        var file_count: usize = 0;
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
+            file_count += 1;
+        }
+        progress_node.setEstimatedTotalItems(file_count);
+    }
 
     var walker = try iterable_dir.walk(allocator);
     defer walker.deinit();
@@ -81,11 +97,13 @@ pub fn init(
     var file_buf = std.ArrayListUnmanaged(u8){};
     defer file_buf.deinit(allocator);
 
+    progress_node.activate();
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
 
         // std.log.info("found file: {s}", .{entry.path});
+        progress_node.completeOne();
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();

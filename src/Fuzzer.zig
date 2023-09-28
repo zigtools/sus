@@ -34,6 +34,7 @@ pub const Config = struct {
 
 allocator: std.mem.Allocator,
 connection: Connection,
+progress_node: *std.Progress.Node,
 mode: *Mode,
 config: Config,
 rand: std.rand.DefaultPrng,
@@ -51,6 +52,7 @@ principal_file_uri: []const u8,
 
 pub fn create(
     allocator: std.mem.Allocator,
+    progress: *std.Progress,
     mode: *Mode,
     config: Config,
 ) !*Fuzzer {
@@ -99,6 +101,7 @@ pub fn create(
     fuzzer.* = .{
         .allocator = allocator,
         .connection = undefined, // set below
+        .progress_node = progress.start("fuzzer", 0),
         .mode = mode,
         .config = config,
         .rand = std.rand.DefaultPrng.init(seed),
@@ -159,6 +162,8 @@ pub fn random(fuzzer: *Fuzzer) std.rand.Random {
 }
 
 pub fn initCycle(fuzzer: *Fuzzer) !void {
+    fuzzer.progress_node.activate();
+
     var arena = std.heap.ArenaAllocator.init(fuzzer.allocator);
     defer arena.deinit();
 
@@ -176,6 +181,8 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
 }
 
 pub fn closeCycle(fuzzer: *Fuzzer) !void {
+    fuzzer.progress_node.end();
+
     var arena = std.heap.ArenaAllocator.init(fuzzer.allocator);
     defer arena.deinit();
 
@@ -188,7 +195,9 @@ pub fn closeCycle(fuzzer: *Fuzzer) !void {
 }
 
 pub fn fuzz(fuzzer: *Fuzzer) !void {
+    fuzzer.progress_node.setCompletedItems(fuzzer.cycle);
     fuzzer.cycle += 1;
+
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
         while (true) {
             fuzzer.allocator.free(fuzzer.principal_file_source);

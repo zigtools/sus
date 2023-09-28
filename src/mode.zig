@@ -8,13 +8,14 @@ pub const Mode = union(enum) {
     pub fn init(
         mode_name: ModeName,
         allocator: std.mem.Allocator,
+        progress: *std.Progress,
         arg_it: *std.process.ArgIterator,
         envmap: std.process.EnvMap,
     ) !Mode {
         switch (mode_name) {
             inline else => |m| {
                 const Inner = std.meta.Child(std.meta.TagPayload(Mode, m));
-                return @unionInit(Mode, @tagName(m), try Inner.init(allocator, arg_it, envmap));
+                return @unionInit(Mode, @tagName(m), try Inner.init(allocator, progress, arg_it, envmap));
             },
         }
     }
