@@ -42,8 +42,8 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
             // }
             // return @as(Block, str[0..len].*);
             // TODO optimize this by ensuring leading len zeroes
-            var block: Block = [1]u8{0} ** len;
-            mem.copy(u8, block[len - str.len ..], str);
+            var block = mem.zeroes(Block);
+            @memcpy(block[len - str.len ..], str);
             return block;
         }
         pub fn strToInt(str: []const u8) Int {
