@@ -23,6 +23,12 @@ const usage =
     Defaults.maxlen,
 });
 
+fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
+    std.io.getStdErr().writeAll(usage) catch {};
+    std.log.err(format, args);
+    std.process.exit(1);
+}
+
 fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.log.err(format, args);
     std.process.exit(1);
@@ -57,20 +63,21 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            // TODO
+            try std.io.getStdOut().writeAll(usage);
+            std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--training-dir")) {
-            training_dir = arg_it.next() orelse fatal("expected directory path after --training-dir", .{});
+            training_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --training-dir", .{});
         } else if (std.mem.eql(u8, arg, "--maxlen")) {
             const next_arg = arg_it.next() orelse fatal("expected integer after --maxlen", .{});
-            mm.maxlen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatal("expected integer after --maxlen", .{});
+            mm.maxlen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatalWithUsage("expected integer after --maxlen", .{});
         } else {
-            fatal("invalid markov arg '{s}'", .{arg});
+            fatalWithUsage("invalid markov arg '{s}'", .{arg});
         }
     }
 
     // make sure required args weren't skipped
     if (training_dir == null or training_dir.?.len == 0) {
-        fatal("missing mode argument '--training-dir'", .{});
+        fatalWithUsage("missing mode argument '--training-dir'", .{});
     }
 
     progress.log(

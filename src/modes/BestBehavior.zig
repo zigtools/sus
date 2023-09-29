@@ -11,6 +11,12 @@ const usage =
     \\     --source_dir   - directory to be used for fuzzing. searched for .zig files recursively.
 ;
 
+fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
+    std.io.getStdErr().writeAll(usage) catch {};
+    std.log.err(format, args);
+    std.process.exit(1);
+}
+
 fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.log.err(format, args);
     std.process.exit(1);
@@ -38,17 +44,18 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            // TODO
+            try std.io.getStdOut().writeAll(usage);
+            std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--source_dir")) {
-            source_dir = arg_it.next() orelse fatal("expected directory path after --source_dir", .{});
+            source_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --source_dir", .{});
         } else {
-            fatal("invalid best_behavior arg '{s}'", .{arg});
+            fatalWithUsage("invalid best_behavior arg '{s}'", .{arg});
         }
     }
 
     // make sure required args weren't skipped
     if (source_dir == null or source_dir.?.len == 0) {
-        fatal("missing mode argument '--source_dir'", .{});
+        fatalWithUsage("missing mode argument '--source_dir'", .{});
     }
 
     progress.log(
