@@ -215,8 +215,6 @@ pub fn main() !void {
     defer _ = general_purpose_allocator.deinit();
     const gpa = general_purpose_allocator.allocator();
 
-    const stderr = std.io.getStdErr().writer();
-
     var env_map: std.process.EnvMap = loadEnv(gpa) catch std.process.EnvMap.init(gpa);
     defer env_map.deinit();
 
@@ -226,7 +224,11 @@ pub fn main() !void {
     var config = try initConfig(gpa, env_map, &arg_it);
     defer config.deinit(gpa);
 
-    try stderr.print(
+    var progress = std.Progress{
+        .terminal = null,
+    };
+
+    progress.log(
         \\zig_version:    {s}
         \\zls_version:    {s}
         \\zls_path:       {s}
@@ -235,24 +237,23 @@ pub fn main() !void {
         \\
     , .{ config.zig_version, config.zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
 
-    var mode = try Mode.init(config.mode_name, gpa, &arg_it, env_map);
+    var mode = try Mode.init(config.mode_name, gpa, &progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
     while (true) {
-        var fuzzer = try Fuzzer.create(gpa, &mode, config);
+        var fuzzer = try Fuzzer.create(gpa, &progress, &mode, config);
         errdefer {
             fuzzer.wait();
             fuzzer.destroy();
         }
+        fuzzer.progress_node.setEstimatedTotalItems(100_000);
         try fuzzer.initCycle();
 
         while (true) {
-            if (fuzzer.cycle % 1000 == 0) {
-                std.log.info("heartbeat {d}", .{fuzzer.cycle});
-            }
+            progress.maybeRefresh();
 
             if (fuzzer.cycle >= 100_000) {
-                std.log.info("Fuzzer running too long with no result... restarting", .{});
+                progress.log("Fuzzer running too long with no result... restarting\n", .{});
 
                 try fuzzer.closeCycle();
                 fuzzer.wait();
@@ -261,11 +262,11 @@ pub fn main() !void {
             }
 
             fuzzer.fuzz() catch {
-                std.log.info("Restarting fuzzer...", .{});
+                progress.log("Restarting fuzzer...\n", .{});
 
                 fuzzer.wait();
                 fuzzer.logPrincipal() catch {
-                    std.log.err("failed to log principal", .{});
+                    progress.log("failed to log principal\n", .{});
                 };
                 fuzzer.destroy();
                 break;
