@@ -6,5 +6,9 @@
             .url = "https://github.com/ziglibs/zig-lsp/archive/958cafe9ba96baaa6a2be6b6b768bcc3c0e8c999.tar.gz",
             .hash = "122068335cb6ec3315b95d745b23095cbf0d1a3988442a6fbf1a40d9f5b2e2b111e3",
         },
+        .sqlite = .{
+            .url = "https://github.com/vrischmann/zig-sqlite/archive/19535aab5760eeaf2979a9dadfca3bb21d1594b9.tar.gz",
+            .hash = "12208c654deea149cee27eaa45d0e6515c3d8f97d775a4156cbcce0ff424b5d26ea3",
+        },
     },
 }
