@@ -10,6 +10,8 @@ const Fuzzer = @This();
 
 pub const Connection = lsp.Connection(std.fs.File.Reader, std.fs.File.Writer, Fuzzer);
 
+// note: if you add or change config options, update the usage in main.zig then
+// run `zig build run -- --help` and paste the contents into the README
 pub const Config = struct {
     output_as_dir: bool,
     zls_path: []const u8,

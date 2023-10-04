@@ -159,18 +159,19 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
 }
 
-// note: if you change this text don't forget to run `zig build run --help`
-// and paste the contents into the README
+// note: if you change this text, run `zig build run -- --help` and paste the contents into the README
 const usage =
     std.fmt.comptimePrint(
-    \\sus - zls fuzzing tooling
+    \\sus - ZLS fuzzing tooling
     \\
-    \\Usage:  sus [options] --mode [mode] -- <mode specific arguments>
-    \\        sus [options] --mode [mode] -- <mode specific arguments>
+    \\Usage:   sus [options] --mode [mode] -- <mode specific arguments>
+    \\
+    \\Example: sus --mode markov        -- --training-dir  /path/to/folder/containing/zig/files/
+    \\         sus --mode best_behavior -- --source_dir   ~/path/to/folder/containing/zig/files/
     \\
     \\General Options:
     \\  --help                Print this help and exit
-    \\  --output-as-dir       Output fuzzing results as directories
+    \\  --output-as-dir       Output fuzzing results as directories (default: {s})
     \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
@@ -179,6 +180,7 @@ const usage =
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
+    if (Fuzzer.Config.Defaults.output_as_dir) "true" else "false",
     std.meta.fieldNames(ModeName).*,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
