@@ -185,6 +185,7 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
 
     var settings = std.json.ObjectMap.init(fuzzer.allocator);
     defer settings.deinit();
+    try settings.putNoClobber("skip_std_references", .{ .bool = true }); // references collection into std is very slow
     try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.value.zig_exe });
 
     try fuzzer.connection.notify("workspace/didChangeConfiguration", lsp_types.DidChangeConfigurationParams{
