@@ -445,19 +445,19 @@ pub fn fuzzFeatureRandom(
 
 pub fn @"window/logMessage"(_: *Connection, params: lsp.Params("window/logMessage")) !void {
     switch (params.type) {
-        .Error => std.log.warn("logMessage err: {s}", .{params.message}),
-        .Warning => std.log.warn("logMessage warn: {s}", .{params.message}),
-        .Info => std.log.warn("logMessage info: {s}", .{params.message}),
-        .Log => std.log.warn("logMessage log: {s}", .{params.message}),
+        .Error => std.log.err("logMessage: {s}", .{params.message}),
+        .Warning => std.log.warn("logMessage: {s}", .{params.message}),
+        .Info => std.log.info("logMessage: {s}", .{params.message}),
+        .Log => std.log.debug("logMessage: {s}", .{params.message}),
     }
 }
 
 pub fn @"window/showMessage"(_: *Connection, params: lsp.Params("window/showMessage")) !void {
     switch (params.type) {
-        .Error => std.log.warn("showMessage err: {s}", .{params.message}),
-        .Warning => std.log.warn("showMessage warn: {s}", .{params.message}),
-        .Info => std.log.warn("showMessage info: {s}", .{params.message}),
-        .Log => std.log.warn("showMessage log: {s}", .{params.message}),
+        .Error => std.log.err("showMessage: {s}", .{params.message}),
+        .Warning => std.log.warn("showMessage: {s}", .{params.message}),
+        .Info => std.log.info("showMessage: {s}", .{params.message}),
+        .Log => std.log.debug("showMessage: {s}", .{params.message}),
     }
 }
 

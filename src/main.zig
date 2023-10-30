@@ -4,25 +4,6 @@ const Fuzzer = @import("Fuzzer.zig");
 const Mode = @import("mode.zig").Mode;
 const ModeName = @import("mode.zig").ModeName;
 
-pub const std_options = struct {
-    pub const log_level = std.log.Level.info;
-
-    pub fn logFn(
-        comptime level: std.log.Level,
-        comptime scope: @TypeOf(.EnumLiteral),
-        comptime format: []const u8,
-        args: anytype,
-    ) void {
-        _ = scope;
-        if (@intFromEnum(level) > @intFromEnum(log_level)) return;
-
-        const level_txt = comptime level.asText();
-
-        std.debug.print("{d} | {s}: ", .{ std.time.milliTimestamp(), level_txt });
-        std.debug.print(format ++ "\n", args);
-    }
-};
-
 fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     var envmap: std.process.EnvMap = std.process.getEnvMap(allocator) catch std.process.EnvMap.init(allocator);
     errdefer envmap.deinit();
