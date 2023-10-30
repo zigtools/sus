@@ -57,6 +57,14 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
     errdefer if (maybe_zls_path) |path| allocator.free(path);
 
+    var maybe_zig_path: ?[]const u8 = blk: {
+        if (env_map.get("zig_path")) |path| {
+            break :blk try allocator.dupe(u8, path);
+        }
+        break :blk findInPath(allocator, env_map, "zig");
+    };
+    errdefer if (maybe_zig_path) |path| allocator.free(path);
+
     var output_as_dir =
         if (env_map.get("output_as_dir")) |str|
         if (std.mem.eql(u8, str, "false"))
@@ -97,7 +105,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
 
     var num_args: usize = 0;
     while (arg_it.next()) |arg| : (num_args += 1) {
-        if (std.mem.eql(u8, arg, "--")) break;
+        if (std.mem.eql(u8, arg, "--")) break; // all argument after '--' are mode specific arguments
 
         if (std.mem.eql(u8, arg, "--help")) {
             try std.io.getStdOut().writeAll(usage);
@@ -110,6 +118,12 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                 maybe_zls_path = null;
             }
             maybe_zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
+        } else if (std.mem.eql(u8, arg, "--zig-path")) {
+            if (maybe_zig_path) |path| {
+                allocator.free(path);
+                maybe_zig_path = null;
+            }
+            maybe_zig_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zig-path", .{}));
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const mode_arg = arg_it.next() orelse fatal("expected mode parameter after --mode", .{});
             mode_name = std.meta.stringToEnum(ModeName, mode_arg) orelse fatal("unknown mode: {s}", .{mode_arg});
@@ -127,6 +141,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     }
 
     const zls_path = maybe_zls_path orelse fatalWithUsage("ZLS was not found in PATH. Please specify --zls-path instead", .{});
+    const zig_path = maybe_zig_path orelse fatalWithUsage("Zig was not found in PATH. Please specify --zig-path instead", .{});
     const mode = mode_name orelse fatalWithUsage("must specify --mode", .{});
 
     const zls_version = blk: {
@@ -138,13 +153,49 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         defer allocator.free(result.stderr);
 
         switch (result.term) {
-            .Exited => |code| if (code == 0) {
-                break :blk try allocator.dupe(u8, std.mem.trim(u8, result.stdout, &std.ascii.whitespace));
-            } else fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
+            .Exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
             else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
         }
+
+        break :blk try allocator.dupe(u8, std.mem.trim(u8, result.stdout, &std.ascii.whitespace));
     };
     errdefer allocator.free(zls_version);
+
+    const zig_env = blk: {
+        const result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ zig_path, "env" },
+        });
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        switch (result.term) {
+            .Exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
+            else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
+        }
+
+        var scanner = std.json.Scanner.initCompleteInput(allocator, result.stdout);
+        defer scanner.deinit();
+
+        var diagnostics: std.json.Diagnostics = .{};
+        scanner.enableDiagnostics(&diagnostics);
+
+        break :blk std.json.parseFromTokenSource(Fuzzer.Config.ZigEnv, allocator, &scanner, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+        }) catch |err| {
+            std.log.err(
+                \\command '{s} env' did not respond with valid json
+                \\stdout:
+                \\{s}
+                \\stderr:
+                \\{s}
+                \\On Line {d}, Column {d}: {}
+            , .{ zig_path, result.stdout, result.stderr, diagnostics.getLine(), diagnostics.getColumn(), err });
+            std.process.exit(1);
+        };
+    };
+    errdefer zig_env.deinit();
 
     return .{
         .output_as_dir = output_as_dir,
@@ -152,9 +203,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         .mode_name = mode,
         .cycles_per_gen = cycles_per_gen,
 
-        // TODO: Get version from Zig executable ZLS uses,
-        // not the executable the fuzzer was compiled with.
-        .zig_version = try allocator.dupe(u8, builtin.zig_version_string),
+        .zig_env = zig_env,
         .zls_version = zls_version,
     };
 }
@@ -171,9 +220,10 @@ const usage =
     \\
     \\General Options:
     \\  --help                Print this help and exit
-    \\  --output-as-dir       Output fuzzing results as directories (default: {s})
-    \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
+    \\  --output-as-dir       Output fuzzing results as directories (default: {s})
+    \\  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
+    \\  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
     \\
     \\For a listing of mode specific options, use 'sus --mode [mode] -- --help'.
@@ -244,11 +294,19 @@ pub fn main() !void {
     progress.log(
         \\zig-version:    {s}
         \\zls-version:    {s}
+        \\zig-path:       {s}
         \\zls-path:       {s}
         \\mode:           {s}
         \\cycles-per-gen: {d}
         \\
-    , .{ config.zig_version, config.zls_version, config.zls_path, @tagName(config.mode_name), config.cycles_per_gen });
+    , .{
+        config.zig_env.value.version,
+        config.zls_version,
+        config.zig_env.value.zig_exe,
+        config.zls_path,
+        @tagName(config.mode_name),
+        config.cycles_per_gen,
+    });
 
     var mode = try Mode.init(config.mode_name, gpa, &progress, &arg_it, env_map);
     defer mode.deinit(gpa);

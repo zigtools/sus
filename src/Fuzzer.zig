@@ -18,7 +18,7 @@ pub const Config = struct {
     mode_name: ModeName,
     cycles_per_gen: u32,
 
-    zig_version: []const u8,
+    zig_env: std.json.Parsed(ZigEnv),
     zls_version: []const u8,
 
     pub const Defaults = struct {
@@ -26,9 +26,18 @@ pub const Config = struct {
         pub const cycles_per_gen: u32 = 25;
     };
 
+    pub const ZigEnv = struct {
+        zig_exe: []const u8,
+        lib_dir: []const u8,
+        std_dir: []const u8,
+        // global_cache_dir: []const u8,
+        version: []const u8,
+        // target: []const u8,
+    };
+
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
+        self.zig_env.deinit();
         allocator.free(self.zls_path);
-        allocator.free(self.zig_version);
         allocator.free(self.zls_version);
         self.* = undefined;
     }
@@ -255,8 +264,8 @@ pub fn logPrincipal(fuzzer: *Fuzzer) !void {
         for ([_][]const u8{
             std.mem.asBytes(&std.time.milliTimestamp()),
 
-            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
-            fuzzer.config.zig_version,
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_env.value.version.len))),
+            fuzzer.config.zig_env.value.version,
 
             std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
             fuzzer.config.zls_version,
