@@ -183,6 +183,14 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
     });
     try fuzzer.connection.notify("initialized", .{});
 
+    var settings = std.json.ObjectMap.init(fuzzer.allocator);
+    defer settings.deinit();
+    try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.value.zig_exe });
+
+    try fuzzer.connection.notify("workspace/didChangeConfiguration", lsp_types.DidChangeConfigurationParams{
+        .settings = .{ .object = settings },
+    });
+
     try fuzzer.connection.notify("textDocument/didOpen", lsp_types.DidOpenTextDocumentParams{ .textDocument = .{
         .uri = fuzzer.principal_file_uri,
         .languageId = "zig",
@@ -442,7 +450,18 @@ pub fn @"window/logMessage"(_: *Connection, params: lsp.Params("window/logMessag
         .Log => std.log.warn("logMessage log: {s}", .{params.message}),
     }
 }
+
+pub fn @"window/showMessage"(_: *Connection, params: lsp.Params("window/showMessage")) !void {
+    switch (params.type) {
+        .Error => std.log.warn("showMessage err: {s}", .{params.message}),
+        .Warning => std.log.warn("showMessage warn: {s}", .{params.message}),
+        .Info => std.log.warn("showMessage info: {s}", .{params.message}),
+        .Log => std.log.warn("showMessage log: {s}", .{params.message}),
+    }
+}
+
 pub fn @"textDocument/publishDiagnostics"(_: *Connection, _: lsp.Params("textDocument/publishDiagnostics")) !void {}
+pub fn @"workspace/semanticTokens/refresh"(_: *Connection, _: lsp.types.RequestId, _: lsp.Params("workspace/semanticTokens/refresh")) !void {}
 
 pub fn dataRecv(
     conn: *Connection,
