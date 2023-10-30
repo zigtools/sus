@@ -242,9 +242,9 @@ pub fn main() !void {
     };
 
     progress.log(
-        \\zig_version:    {s}
-        \\zls_version:    {s}
-        \\zls_path:       {s}
+        \\zig-version:    {s}
+        \\zls-version:    {s}
+        \\zls-path:       {s}
         \\mode:           {s}
         \\cycles-per-gen: {d}
         \\

@@ -8,7 +8,7 @@ tests: std.ArrayListUnmanaged([]const u8),
 
 const usage =
     \\Usage best behavior Mode:
-    \\     --source_dir   - directory to be used for fuzzing. searched for .zig files recursively.
+    \\     --source-dir   - directory to be used for fuzzing. searched for .zig files recursively.
 ;
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
@@ -46,8 +46,8 @@ pub fn init(
         if (std.mem.eql(u8, arg, "--help")) {
             try std.io.getStdOut().writeAll(usage);
             std.process.exit(0);
-        } else if (std.mem.eql(u8, arg, "--source_dir")) {
-            source_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --source_dir", .{});
+        } else if (std.mem.eql(u8, arg, "--source-dir")) {
+            source_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --source-dir", .{});
         } else {
             fatalWithUsage("invalid best_behavior arg '{s}'", .{arg});
         }
@@ -55,12 +55,12 @@ pub fn init(
 
     // make sure required args weren't skipped
     if (source_dir == null or source_dir.?.len == 0) {
-        fatalWithUsage("missing mode argument '--source_dir'", .{});
+        fatalWithUsage("missing mode argument '--source-dir'", .{});
     }
 
     progress.log(
         \\
-        \\source_dir:     {s}
+        \\source-dir:     {s}
         \\
         \\
     , .{source_dir.?});
