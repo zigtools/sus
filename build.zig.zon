@@ -11,4 +11,5 @@
             .hash = "12208c654deea149cee27eaa45d0e6515c3d8f97d775a4156cbcce0ff424b5d26ea3",
         },
     },
+    .paths = .{""},
 }

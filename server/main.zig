@@ -1,12 +1,16 @@
 const std = @import("std");
+const views = @import("views.zig");
 const sqlite = @import("sqlite");
+const builtin = @import("builtin");
 const Request = std.http.Server.Request;
 const Response = std.http.Server.Response;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    var server = std.http.Server.init(allocator, .{});
+    var server = std.http.Server.init(allocator, .{ .reuse_address = true });
+    defer server.deinit();
+
     try server.listen(try std.net.Address.parseIp("127.0.0.1", 1313));
 
     var database = try Database.init(.{
@@ -51,12 +55,13 @@ pub const Database = struct {
         var db = try sqlite.Db.init(options);
 
         var diags = sqlite.Diagnostics{};
-        db.execMulti(@embedFile("sql/migrations/001_init.sql"), .{
-            .diags = &diags,
-        }) catch |err| {
-            std.log.err("ERR {s}", .{diags});
-            return err;
-        };
+        _ = diags;
+        // db.execMulti(@embedFile("sql/migrations/001_init.sql"), .{
+        //     .diags = &diags,
+        // }) catch |err| {
+        //     std.log.err("ERR {s}", .{diags});
+        //     return err;
+        // };
 
         return .{
             .db = db,
@@ -206,6 +211,12 @@ pub const Router = struct {
             },
             .handler = &index,
         },
+        .{
+            .parts = &.{
+                .{ .string = "/static/style.css" },
+            },
+            .handler = &style,
+        },
     };
 
     pub fn accept(router: *Router) !void {
@@ -229,7 +240,7 @@ pub const Router = struct {
                 for (route.parts) |part| {
                     switch (part) {
                         .string => |str| {
-                            if (std.mem.eql(u8, path[i..str.len], str)) {
+                            if (path.len >= str.len and std.mem.eql(u8, path[i..str.len], str)) {
                                 i += str.len;
                             } else {
                                 continue :rit;
@@ -271,6 +282,7 @@ pub const Router = struct {
     }
 
     pub fn index(router: *Router, req: *Request, res: *Response) anyerror!void {
+        _ = req;
         const allocator = router.allocator;
 
         const body = try res.reader().readAllAlloc(allocator, 8192);
@@ -279,11 +291,31 @@ pub const Router = struct {
         res.transfer_encoding = .chunked;
         try res.do();
 
-        try res.headers.append("Content-Type", "text/plain");
+        try res.headers.append("Content-Type", "text/html");
 
-        for (req.headers.list.items) |header| {
-            try res.writer().print("{s}: {s}\n", .{ header.name, header.value });
-        }
+        try views.renderIndex(std.io.bufferedWriter(res.writer()).writer());
+
+        try res.finish();
+    }
+
+    pub fn style(router: *Router, req: *Request, res: *Response) anyerror!void {
+        _ = req;
+        const allocator = router.allocator;
+
+        const body = try res.reader().readAllAlloc(allocator, 8192);
+        defer allocator.free(body);
+
+        const stylesheet = if (builtin.mode == .Debug)
+            try std.fs.cwd().readFileAlloc(allocator, "server/static/style.css", std.math.maxInt(usize))
+        else
+            @embedFile("static/style.css");
+        defer if (builtin.mode == .Debug) allocator.free(stylesheet);
+
+        res.transfer_encoding = .{ .content_length = stylesheet.len };
+        try res.do();
+
+        try res.headers.append("Content-Type", "text/css");
+        try res.writer().writeAll(stylesheet);
 
         try res.finish();
     }
