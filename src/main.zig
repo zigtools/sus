@@ -47,22 +47,26 @@ fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
 }
 
 fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
-    _ = arg_it.next() orelse @panic("");
+    _ = arg_it.skip();
 
-    var zls_path: ?[]const u8 = blk: {
+    var maybe_zls_path: ?[]const u8 = blk: {
         if (env_map.get("zls_path")) |path| {
             break :blk try allocator.dupe(u8, path);
         }
         break :blk findInPath(allocator, env_map, "zls");
     };
-    errdefer if (zls_path) |path| allocator.free(path);
+    errdefer if (maybe_zls_path) |path| allocator.free(path);
 
     var output_as_dir =
         if (env_map.get("output_as_dir")) |str|
         if (std.mem.eql(u8, str, "false"))
             false
-        else
+        else if (std.mem.eql(u8, str, "true"))
             true
+        else blk: {
+            std.log.warn("expected boolean (true|false) in env option 'output_as_dir' but got '{s}'", .{str});
+            break :blk Fuzzer.Config.Defaults.output_as_dir;
+        }
     else
         Fuzzer.Config.Defaults.output_as_dir;
 
@@ -85,7 +89,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             if (std.fmt.parseUnsigned(u32, str, 10)) |cpg| {
                 break :blk cpg;
             } else |err| {
-                std.log.warn("expected integer in env option 'cycles_per_gen' but got '{s}': {}", .{ str, err });
+                std.log.warn("expected unsigned integer in env option 'cycles_per_gen' but got '{s}': {}", .{ str, err });
             }
         }
         break :blk Fuzzer.Config.Defaults.cycles_per_gen;
@@ -96,49 +100,56 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (std.mem.eql(u8, arg, "--")) break;
 
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdErr().writeAll(usage);
+            try std.io.getStdOut().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--output-as-dir")) {
             output_as_dir = true;
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
-            zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
+            if (maybe_zls_path) |path| {
+                allocator.free(path);
+                maybe_zls_path = null;
+            }
+            maybe_zls_path = try allocator.dupe(u8, arg_it.next() orelse fatal("expected file path after --zls-path", .{}));
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const mode_arg = arg_it.next() orelse fatal("expected mode parameter after --mode", .{});
             mode_name = std.meta.stringToEnum(ModeName, mode_arg) orelse fatal("unknown mode: {s}", .{mode_arg});
         } else if (std.mem.eql(u8, arg, "--cycles-per-gen")) {
-            const next_arg = arg_it.next() orelse fatal("expected integer after --cycles-per-gen", .{});
-            cycles_per_gen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatal("invalid integer '{s}'", .{next_arg});
+            const next_arg = arg_it.next() orelse fatal("expected unsigned integer after --cycles-per-gen", .{});
+            cycles_per_gen = std.fmt.parseUnsigned(u32, next_arg, 10) catch fatal("invalid unsigned integer '{s}'", .{next_arg});
         } else {
             fatalWithUsage("unknown parameter: {s}", .{arg});
         }
     }
 
-    if (num_args == 0 and (zls_path == null or mode_name == null)) {
+    if (num_args == 0 and (maybe_zls_path == null or mode_name == null)) {
         try std.io.getStdErr().writeAll(usage);
         std.process.exit(1);
     }
 
-    // make sure required parameters weren't skipped
-    if (zls_path == null) {
-        fatalWithUsage("must specify --zls-path", .{});
-    } else if (mode_name == null) {
-        fatalWithUsage("must specify --mode", .{});
-    }
+    const zls_path = maybe_zls_path orelse fatalWithUsage("ZLS was not found in PATH. Please specify --zls-path instead", .{});
+    const mode = mode_name orelse fatalWithUsage("must specify --mode", .{});
 
     const zls_version = blk: {
-        const vers = try std.ChildProcess.exec(.{
+        const result = try std.process.Child.exec(.{
             .allocator = allocator,
-            .argv = &.{ zls_path.?, "--version" },
+            .argv = &.{ zls_path, "--version" },
         });
-        defer allocator.free(vers.stdout);
-        defer allocator.free(vers.stderr);
-        break :blk try allocator.dupe(u8, std.mem.trim(u8, vers.stdout, &std.ascii.whitespace));
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        switch (result.term) {
+            .Exited => |code| if (code == 0) {
+                break :blk try allocator.dupe(u8, std.mem.trim(u8, result.stdout, &std.ascii.whitespace));
+            } else fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
+            else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
+        }
     };
+    errdefer allocator.free(zls_version);
 
     return .{
         .output_as_dir = output_as_dir,
-        .zls_path = zls_path.?,
-        .mode_name = mode_name.?,
+        .zls_path = zls_path,
+        .mode_name = mode,
         .cycles_per_gen = cycles_per_gen,
 
         // TODO: Get version from Zig executable ZLS uses,
@@ -148,18 +159,19 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
 }
 
-// note: if you change this text don't forget to run `zig build run --help`
-// and paste the contents into the README
+// note: if you change this text, run `zig build run -- --help` and paste the contents into the README
 const usage =
     std.fmt.comptimePrint(
-    \\sus - zls fuzzing tooling
+    \\sus - ZLS fuzzing tooling
     \\
-    \\Usage:  sus [options] --mode [mode] -- <mode specific arguments>
-    \\        sus [options] --mode [mode] -- <mode specific arguments>
+    \\Usage:   sus [options] --mode [mode] -- <mode specific arguments>
+    \\
+    \\Example: sus --mode markov        -- --training-dir  /path/to/folder/containing/zig/files/
+    \\         sus --mode best_behavior -- --source_dir   ~/path/to/folder/containing/zig/files/
     \\
     \\General Options:
     \\  --help                Print this help and exit
-    \\  --output-as-dir       Output fuzzing results as directories
+    \\  --output-as-dir       Output fuzzing results as directories (default: {s})
     \\  --zls-path [path]     Specify path to ZLS executable
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
@@ -168,6 +180,7 @@ const usage =
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
+    if (Fuzzer.Config.Defaults.output_as_dir) "true" else "false",
     std.meta.fieldNames(ModeName).*,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
