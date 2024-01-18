@@ -43,7 +43,7 @@ rand: std.rand.DefaultPrng,
 cycle: usize = 0,
 
 zls_process: ChildProcess,
-stderr_thread_keep_running: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
+stderr_thread_keep_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 stderr_thread: std.Thread,
 
 stdin_output: std.ArrayListUnmanaged(u8) = .{},

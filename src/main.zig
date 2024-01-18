@@ -130,7 +130,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     const mode = mode_name orelse fatalWithUsage("must specify --mode", .{});
 
     const zls_version = blk: {
-        const result = try std.process.Child.exec(.{
+        const result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ zls_path, "--version" },
         });

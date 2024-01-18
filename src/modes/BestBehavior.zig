@@ -68,7 +68,7 @@ pub fn init(
     var progress_node = progress.start("best behavior: loading files", 0);
     defer progress_node.end();
 
-    var iterable_dir = try std.fs.cwd().openIterableDir(source_dir.?, .{});
+    var iterable_dir = try std.fs.cwd().openDir(source_dir.?, .{ .iterate = true });
     defer iterable_dir.close();
 
     {

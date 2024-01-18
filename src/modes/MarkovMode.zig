@@ -91,7 +91,7 @@ pub fn init(
     var progress_node = progress.start("markov: feeding model", 0);
     defer progress_node.end();
 
-    var iterable_dir = try std.fs.cwd().openIterableDir(training_dir.?, .{});
+    var iterable_dir = try std.fs.cwd().openDir(training_dir.?, .{ .iterate = true });
     defer iterable_dir.close();
 
     {
