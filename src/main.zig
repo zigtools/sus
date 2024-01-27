@@ -44,7 +44,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         }
         break :blk findInPath(allocator, env_map, "zig");
     };
-    errdefer if (maybe_zig_path) |path| allocator.free(path);
+    defer if (maybe_zig_path) |path| allocator.free(path);
 
     var output_as_dir =
         if (env_map.get("output_as_dir")) |str|
