@@ -102,8 +102,8 @@ pub fn init(
             if (entry.kind != .file) continue;
             if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
             file_count += 1;
+            progress_node.setEstimatedTotalItems(file_count);
         }
-        progress_node.setEstimatedTotalItems(file_count);
     }
 
     var walker = try iterable_dir.walk(allocator);
@@ -118,7 +118,6 @@ pub fn init(
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
 
         // std.log.info("found file: {s}", .{entry.path});
-        progress_node.completeOne();
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
@@ -129,6 +128,8 @@ pub fn init(
         _ = try file.readAll(file_buf.items);
 
         try mm.model.feed(file_buf.items);
+
+        progress_node.completeOne();
     }
 
     mm.model.prep();
