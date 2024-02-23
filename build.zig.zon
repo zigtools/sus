@@ -3,8 +3,15 @@
     .version = "0.1.0",
     .dependencies = .{
         .@"zig-lsp" = .{
-            .url = "https://github.com/ziglibs/zig-lsp/archive/958cafe9ba96baaa6a2be6b6b768bcc3c0e8c999.tar.gz",
-            .hash = "122068335cb6ec3315b95d745b23095cbf0d1a3988442a6fbf1a40d9f5b2e2b111e3",
+            .url = "https://github.com/ziglibs/zig-lsp/archive/1c18c0c64b076e79385e525214a7acc4fdf7d398.tar.gz",
+            .hash = "12208c1385f4c1adca29fd17cc93397a60e54d5987bb27b9f961cb1945a96fc4a7e1",
         },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
     },
 }

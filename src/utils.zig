@@ -93,8 +93,8 @@ pub fn randomize(
             const pi = @typeInfo(T).Pointer;
             switch (pi.size) {
                 .Slice => {
-                    var n = random.intRangeLessThan(usize, 0, 10);
-                    var slice = try allocator.alloc(pi.child, n);
+                    const n = random.intRangeLessThan(usize, 0, 10);
+                    const slice = try allocator.alloc(pi.child, n);
                     for (slice) |*v| {
                         if (pi.child == u8)
                             v.* = random.intRangeLessThan(u8, 32, 126)
@@ -162,8 +162,8 @@ pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Posit
 }
 
 pub fn randomRange(random: std.rand.Random, data: []const u8) lsp_types.Range {
-    var a = randomPosition(random, data);
-    var b = randomPosition(random, data);
+    const a = randomPosition(random, data);
+    const b = randomPosition(random, data);
 
     const is_a_first = a.line < b.line or (a.line == b.line and a.character < b.character);
 

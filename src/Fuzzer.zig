@@ -18,7 +18,7 @@ pub const Config = struct {
     mode_name: ModeName,
     cycles_per_gen: u32,
 
-    zig_version: []const u8,
+    zig_env: std.json.Parsed(ZigEnv),
     zls_version: []const u8,
 
     pub const Defaults = struct {
@@ -26,9 +26,18 @@ pub const Config = struct {
         pub const cycles_per_gen: u32 = 25;
     };
 
+    pub const ZigEnv = struct {
+        zig_exe: []const u8,
+        lib_dir: []const u8,
+        std_dir: []const u8,
+        // global_cache_dir: []const u8,
+        version: []const u8,
+        // target: []const u8,
+    };
+
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
+        self.zig_env.deinit();
         allocator.free(self.zls_path);
-        allocator.free(self.zig_version);
         allocator.free(self.zls_version);
         self.* = undefined;
     }
@@ -43,7 +52,7 @@ rand: std.rand.DefaultPrng,
 cycle: usize = 0,
 
 zls_process: ChildProcess,
-stderr_thread_keep_running: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
+stderr_thread_keep_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 stderr_thread: std.Thread,
 
 stdin_output: std.ArrayListUnmanaged(u8) = .{},
@@ -174,6 +183,15 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
     });
     try fuzzer.connection.notify("initialized", .{});
 
+    var settings = std.json.ObjectMap.init(fuzzer.allocator);
+    defer settings.deinit();
+    try settings.putNoClobber("skip_std_references", .{ .bool = true }); // references collection into std is very slow
+    try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.value.zig_exe });
+
+    try fuzzer.connection.notify("workspace/didChangeConfiguration", lsp_types.DidChangeConfigurationParams{
+        .settings = .{ .object = settings },
+    });
+
     try fuzzer.connection.notify("textDocument/didOpen", lsp_types.DidOpenTextDocumentParams{ .textDocument = .{
         .uri = fuzzer.principal_file_uri,
         .languageId = "zig",
@@ -255,8 +273,8 @@ pub fn logPrincipal(fuzzer: *Fuzzer) !void {
         for ([_][]const u8{
             std.mem.asBytes(&std.time.milliTimestamp()),
 
-            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_version.len))),
-            fuzzer.config.zig_version,
+            std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zig_env.value.version.len))),
+            fuzzer.config.zig_env.value.version,
 
             std.mem.asBytes(&@as(u8, @intCast(fuzzer.config.zls_version.len))),
             fuzzer.config.zls_version,
@@ -427,13 +445,24 @@ pub fn fuzzFeatureRandom(
 
 pub fn @"window/logMessage"(_: *Connection, params: lsp.Params("window/logMessage")) !void {
     switch (params.type) {
-        .Error => std.log.warn("logMessage err: {s}", .{params.message}),
-        .Warning => std.log.warn("logMessage warn: {s}", .{params.message}),
-        .Info => std.log.warn("logMessage info: {s}", .{params.message}),
-        .Log => std.log.warn("logMessage log: {s}", .{params.message}),
+        .Error => std.log.err("logMessage: {s}", .{params.message}),
+        .Warning => std.log.warn("logMessage: {s}", .{params.message}),
+        .Info => std.log.info("logMessage: {s}", .{params.message}),
+        .Log => std.log.debug("logMessage: {s}", .{params.message}),
     }
 }
+
+pub fn @"window/showMessage"(_: *Connection, params: lsp.Params("window/showMessage")) !void {
+    switch (params.type) {
+        .Error => std.log.err("showMessage: {s}", .{params.message}),
+        .Warning => std.log.warn("showMessage: {s}", .{params.message}),
+        .Info => std.log.info("showMessage: {s}", .{params.message}),
+        .Log => std.log.debug("showMessage: {s}", .{params.message}),
+    }
+}
+
 pub fn @"textDocument/publishDiagnostics"(_: *Connection, _: lsp.Params("textDocument/publishDiagnostics")) !void {}
+pub fn @"workspace/semanticTokens/refresh"(_: *Connection, _: lsp.types.RequestId, _: lsp.Params("workspace/semanticTokens/refresh")) !void {}
 
 pub fn dataRecv(
     conn: *Connection,

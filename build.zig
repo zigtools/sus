@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     const zig_lsp = b.dependency("zig-lsp", .{}).module("zig-lsp");
 
     const target = b.standardTargetOptions(.{});
@@ -12,7 +12,7 @@ pub fn build(b: *std.build.Builder) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("zig-lsp", zig_lsp);
+    exe.root_module.addImport("zig-lsp", zig_lsp);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -43,5 +43,5 @@ pub fn build(b: *std.build.Builder) void {
     ) orelse 8;
     const options = b.addOptions();
     options.addOption(u8, "block_len", block_len);
-    exe.addOptions("build_options", options);
+    exe.root_module.addOptions("build_options", options);
 }
