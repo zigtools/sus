@@ -219,6 +219,15 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
     fuzzer.cycle += 1;
 
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
+        var arena_allocator = std.heap.ArenaAllocator.init(fuzzer.allocator);
+        defer arena_allocator.deinit();
+        const arena = arena_allocator.allocator();
+
+        while (fuzzer.connection.callback_map.count() != 0) {
+            _ = arena_allocator.reset(.retain_capacity);
+            try fuzzer.connection.acceptUntilResponse(arena);
+        }
+
         while (true) {
             fuzzer.allocator.free(fuzzer.principal_file_source);
             fuzzer.principal_file_source = try fuzzer.mode.gen(fuzzer.allocator);
@@ -320,124 +329,171 @@ pub const WhatToFuzz = enum {
     rename,
 };
 
+fn requestCallback(comptime method: []const u8) lsp.RequestCallback(Connection, method) {
+    const Context = struct {
+        pub fn res(_: *Connection, _: lsp.Result(method)) !void {}
+
+        pub fn err(_: *Connection, resperr: lsp_types.ResponseError) !void {
+            return switch (resperr.code) {
+                @intFromEnum(lsp_types.ErrorCodes.ParseError) => error.ParseError,
+                @intFromEnum(lsp_types.ErrorCodes.InvalidRequest) => error.InvalidRequest,
+                @intFromEnum(lsp_types.ErrorCodes.MethodNotFound) => error.MethodNotFound,
+                @intFromEnum(lsp_types.ErrorCodes.InvalidParams) => error.InvalidParams,
+                @intFromEnum(lsp_types.ErrorCodes.InternalError) => error.InternalError,
+                @intFromEnum(lsp_types.ErrorCodes.ServerNotInitialized) => error.ServerNotInitialized,
+                @intFromEnum(lsp_types.ErrorCodes.UnknownErrorCode) => error.UnknownErrorCode,
+                else => error.InternalError,
+            };
+        }
+    };
+    return .{
+        .onResponse = &Context.res,
+        .onError = &Context.err,
+    };
+}
+
 pub fn fuzzFeatureRandom(
     fuzzer: *Fuzzer,
     file_uri: []const u8,
     file_data: []const u8,
 ) !void {
-    var arena_allocator = std.heap.ArenaAllocator.init(fuzzer.allocator);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
     switch (wtf) {
-        .completion => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/completion", .{
+        .completion => try fuzzer.connection.request(
+            "textDocument/completion",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .declaration => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/declaration", .{
+            },
+            requestCallback("textDocument/completion"),
+        ),
+        .declaration => try fuzzer.connection.request(
+            "textDocument/declaration",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .definition => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/definition", .{
+            },
+            requestCallback("textDocument/declaration"),
+        ),
+        .definition => try fuzzer.connection.request(
+            "textDocument/definition",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .type_definition => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/typeDefinition", .{
+            },
+            requestCallback("textDocument/definition"),
+        ),
+        .type_definition => try fuzzer.connection.request(
+            "textDocument/typeDefinition",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .implementation => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/implementation", .{
+            },
+            requestCallback("textDocument/typeDefinition"),
+        ),
+        .implementation => try fuzzer.connection.request(
+            "textDocument/implementation",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .references => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/references", .{
-                .context = .{
-                    .includeDeclaration = rand.boolean(),
-                },
+            },
+            requestCallback("textDocument/implementation"),
+        ),
+        .references => try fuzzer.connection.request(
+            "textDocument/references",
+            .{
+                .context = .{ .includeDeclaration = rand.boolean() },
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .signature_help => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/signatureHelp", .{
+            },
+            requestCallback("textDocument/references"),
+        ),
+        .signature_help => try fuzzer.connection.request(
+            "textDocument/signatureHelp",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .hover => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/hover", .{
+            },
+            requestCallback("textDocument/signatureHelp"),
+        ),
+        .hover => try fuzzer.connection.request(
+            "textDocument/hover",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .semantic => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/semanticTokens/full", .{
-                .textDocument = .{ .uri = file_uri },
-            });
-        },
-        .document_symbol => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/documentSymbol", .{
-                .textDocument = .{ .uri = file_uri },
-            });
-        },
+            },
+            requestCallback("textDocument/hover"),
+        ),
+        .semantic => try fuzzer.connection.request(
+            "textDocument/semanticTokens/full",
+            .{ .textDocument = .{ .uri = file_uri } },
+            requestCallback("textDocument/semanticTokens/full"),
+        ),
+        .document_symbol => try fuzzer.connection.request(
+            "textDocument/documentSymbol",
+            .{ .textDocument = .{ .uri = file_uri } },
+            requestCallback("textDocument/documentSymbol"),
+        ),
         .folding_range => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/foldingRange", .{
-                .textDocument = .{ .uri = file_uri },
-            });
+            _ = try fuzzer.connection.request(
+                "textDocument/foldingRange",
+                .{ .textDocument = .{ .uri = file_uri } },
+                requestCallback("textDocument/foldingRange"),
+            );
         },
-        .formatting => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/formatting", .{
+        .formatting => try fuzzer.connection.request(
+            "textDocument/formatting",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .options = .{
                     .tabSize = 4,
                     .insertSpaces = true,
                 },
-            });
-        },
-        .document_highlight => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/documentHighlight", .{
+            },
+            requestCallback("textDocument/formatting"),
+        ),
+        .document_highlight => try fuzzer.connection.request(
+            "textDocument/documentHighlight",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
-            });
-        },
-        .inlay_hint => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/inlayHint", .{
+            },
+            requestCallback("textDocument/documentHighlight"),
+        ),
+        .inlay_hint => try fuzzer.connection.request(
+            "textDocument/inlayHint",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .range = utils.randomRange(rand, file_data),
-            });
-        },
+            },
+            requestCallback("textDocument/inlayHint"),
+        ),
         // TODO: Nest positions properly to avoid crash
         // .selection_range => {
         //     var positions: [16]lsp_types.Position = undefined;
         //     for (positions) |*pos| {
         //         pos.* = utils.randomPosition(rand, file_data);
         //     }
-        //     _ = try fuzzer.connection.requestSync(arena, "textDocument/selectionRange", .{
-        //         .textDocument = .{ .uri = file_uri, },
-        //         .positions = &positions,
-        //     });
+        //     try fuzzer.connection.request(
+        //         "textDocument/selectionRange",
+        //         .{
+        //             .textDocument = .{ .uri = file_uri },
+        //             .positions = &positions,
+        //         },
+        //         requestCallback("textDocument/selectionRange"),
+        //     );
         // },
-        .rename => {
-            _ = try fuzzer.connection.requestSync(arena, "textDocument/rename", .{
+        .rename => try fuzzer.connection.request(
+            "textDocument/rename",
+            .{
                 .textDocument = .{ .uri = file_uri },
                 .position = utils.randomPosition(rand, file_data),
                 .newName = "helloWorld",
-            });
-        },
+            },
+            requestCallback("textDocument/rename"),
+        ),
     }
 }
 
