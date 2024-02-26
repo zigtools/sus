@@ -12,7 +12,7 @@ const Fuzzer = @This();
 // note: if you add or change config options, update the usage in main.zig then
 // run `zig build run -- --help` and paste the contents into the README
 pub const Config = struct {
-    output_as_dir: bool,
+    rpc: bool,
     zls_path: []const u8,
     mode_name: ModeName,
     cycles_per_gen: u32,
@@ -21,7 +21,7 @@ pub const Config = struct {
     zls_version: []const u8,
 
     pub const Defaults = struct {
-        pub const output_as_dir = false;
+        pub const rpc = false;
         pub const cycles_per_gen: u32 = 25;
     };
 
@@ -64,6 +64,7 @@ read_buffer: std.ArrayListUnmanaged(u8) = .{},
 
 sent_data: std.ArrayListUnmanaged(u8) = .{},
 sent_messages: std.ArrayListUnmanaged(SentMessage) = .{},
+sent_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .{},
 
 principal_file_source: []const u8 = "",
 principal_file_uri: []const u8,
@@ -91,6 +92,9 @@ pub fn create(
     try zls_process.spawn();
     errdefer _ = zls_process.kill() catch @panic("failed to kill zls process");
 
+    var sent_ids = std.AutoArrayHashMapUnmanaged(i64, void){};
+    try sent_ids.ensureTotalCapacity(allocator, config.cycles_per_gen);
+
     fuzzer.* = .{
         .allocator = allocator,
         .progress_node = progress.start("fuzzer", 0),
@@ -100,6 +104,7 @@ pub fn create(
         .rand = std.rand.DefaultPrng.init(seed),
         .zls_process = zls_process,
         .buffered_reader = std.io.bufferedReader(zls_process.stdout.?.reader()),
+        .sent_ids = sent_ids,
         .principal_file_uri = principal_file_uri,
     };
 
@@ -119,6 +124,7 @@ pub fn destroy(fuzzer: *Fuzzer) void {
 
     fuzzer.sent_data.deinit(allocator);
     fuzzer.sent_messages.deinit(allocator);
+    fuzzer.sent_ids.deinit(allocator);
 
     allocator.free(fuzzer.principal_file_source);
 
@@ -180,6 +186,14 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
     fuzzer.cycle += 1;
 
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
+        // detch from cycle count to prevent pipe fillage on windows
+        try utils.waitForResponseToRequests(
+            fuzzer.allocator,
+            fuzzer.buffered_reader.reader(),
+            &fuzzer.read_buffer,
+            &fuzzer.sent_ids,
+        );
+
         // var arena_allocator = std.heap.ArenaAllocator.init(fuzzer.allocator);
         // defer arena_allocator.deinit();
         // const arena = arena_allocator.allocator();
@@ -193,6 +207,7 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
 
         fuzzer.sent_data.items.len = 0;
         fuzzer.sent_messages.items.len = 0;
+        fuzzer.sent_ids.clearRetainingCapacity();
 
         try fuzzer.sendNotification("textDocument/didChange", lsp.DidChangeTextDocumentParams{
             .textDocument = .{ .uri = fuzzer.principal_file_uri, .version = @intCast(fuzzer.cycle) },
@@ -362,12 +377,14 @@ fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Param
         .end = @intCast(fuzzer.sent_data.items.len),
     });
 
-    try utils.waitForResponseToRequest(
-        fuzzer.allocator,
-        fuzzer.buffered_reader.reader(),
-        &fuzzer.read_buffer,
-        request_id,
-    );
+    fuzzer.sent_ids.putAssumeCapacityNoClobber(request_id, void{});
+
+    // try utils.waitForResponseToRequest(
+    //     fuzzer.allocator,
+    //     fuzzer.buffered_reader.reader(),
+    //     &fuzzer.read_buffer,
+    //     request_id,
+    // );
 }
 
 fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Params(method)) !void {

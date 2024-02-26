@@ -58,7 +58,7 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     var zls_process = std.ChildProcess.init(&.{ reducer.config.zls_path, "--enable-debug-log" }, reducer.allocator);
     zls_process.env_map = reducer.env_map;
     zls_process.stdin_behavior = .Pipe;
-    zls_process.stderr_behavior = .Inherit;
+    zls_process.stderr_behavior = .Ignore;
     zls_process.stdout_behavior = .Pipe;
 
     try zls_process.spawn();

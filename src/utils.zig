@@ -263,3 +263,32 @@ pub fn waitForResponseToRequest(
         }
     }
 }
+
+pub fn waitForResponseToRequests(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    read_buffer: *std.ArrayListUnmanaged(u8),
+    ids: *std.AutoArrayHashMapUnmanaged(i64, void),
+) !void {
+    while (ids.count() != 0) {
+        const header = try Header.parse(reader);
+        try read_buffer.resize(allocator, header.content_length);
+
+        try reader.readNoEof(read_buffer.items);
+
+        const result = try std.json.parseFromSlice(
+            struct { id: ?lsp.RequestId },
+            allocator,
+            read_buffer.items,
+            .{
+                .ignore_unknown_fields = true,
+            },
+        );
+        defer result.deinit();
+
+        if (result.value.id) |received_id| {
+            if (received_id != .integer) continue;
+            std.debug.assert(ids.swapRemove(received_id.integer));
+        }
+    }
+}
