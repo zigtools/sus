@@ -292,8 +292,38 @@ pub fn main() !void {
     var mode = try Mode.init(config.mode_name, gpa, &progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
+    const cwd_path = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd_path);
+
+    const principal_file_path = try std.fs.path.join(gpa, &.{ cwd_path, "tmp", "principal.zig" });
+    defer gpa.free(principal_file_path);
+
+    const principal_file_uri = try std.fmt.allocPrint(gpa, "{;@+/?#r}", .{std.Uri{
+        .scheme = "file",
+        .user = null,
+        .password = null,
+        .host = "",
+        .port = null,
+        .path = principal_file_path,
+        .query = null,
+        .fragment = null,
+    }});
+    defer gpa.free(principal_file_uri);
+
+    std.log.info("{s}", .{principal_file_uri});
+    // if (1 == 1) return;
+
+    try env_map.put("NO_COLOR", "");
+
     while (true) {
-        var fuzzer = try Fuzzer.create(gpa, &progress, &mode, config);
+        var fuzzer = try Fuzzer.create(
+            gpa,
+            &progress,
+            &mode,
+            config,
+            &env_map,
+            principal_file_uri,
+        );
         errdefer {
             fuzzer.wait();
             fuzzer.destroy();
@@ -317,11 +347,11 @@ pub fn main() !void {
                 progress.log("Restarting fuzzer...\n", .{});
 
                 fuzzer.wait();
-                fuzzer.logPrincipal() catch {
-                    progress.log("failed to log principal\n", .{});
-                };
+                try fuzzer.reduce();
                 fuzzer.destroy();
+
                 break;
+                // return;
             };
         }
     }

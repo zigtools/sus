@@ -1,8 +1,6 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const zig_lsp = b.dependency("zig-lsp", .{}).module("zig-lsp");
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -12,7 +10,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("zig-lsp", zig_lsp);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

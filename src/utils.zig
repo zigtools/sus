@@ -1,6 +1,6 @@
 const std = @import("std");
-const lsp = @import("zig-lsp");
-const lsp_types = lsp.types;
+const lsp = @import("lsp.zig");
+const Header = @import("Header.zig");
 
 /// Use after `isArrayList` and/or `isHashMap`
 pub fn isManaged(comptime T: type) bool {
@@ -138,7 +138,7 @@ pub fn randomize(
     };
 }
 
-pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Position {
+pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp.Position {
     // TODO: Consider offsets
 
     const line_count = std.mem.count(u8, data, "\n");
@@ -161,11 +161,105 @@ pub fn randomPosition(random: std.rand.Random, data: []const u8) lsp_types.Posit
     };
 }
 
-pub fn randomRange(random: std.rand.Random, data: []const u8) lsp_types.Range {
+pub fn randomRange(random: std.rand.Random, data: []const u8) lsp.Range {
     const a = randomPosition(random, data);
     const b = randomPosition(random, data);
 
     const is_a_first = a.line < b.line or (a.line == b.line and a.character < b.character);
 
     return if (is_a_first) .{ .start = a, .end = b } else .{ .start = b, .end = a };
+}
+
+pub fn Params(comptime method: []const u8) type {
+    for (lsp.notification_metadata) |notif| {
+        if (std.mem.eql(u8, method, notif.method)) return notif.Params orelse void;
+    }
+
+    for (lsp.request_metadata) |req| {
+        if (std.mem.eql(u8, method, req.method)) return req.Params orelse void;
+    }
+
+    @compileError("Couldn't find params for method named " ++ method);
+}
+
+pub fn stringifyRequest(
+    writer: anytype,
+    id: *i64,
+    comptime method: []const u8,
+    params: Params(method),
+) !void {
+    try std.json.stringify(.{
+        .jsonrpc = "2.0",
+        .id = id.*,
+        .method = method,
+        .params = switch (@TypeOf(params)) {
+            void => .{},
+            ?void => null,
+            else => params,
+        },
+    }, .{}, writer);
+    id.* +%= 1;
+}
+
+pub fn stringifyNotification(
+    writer: anytype,
+    comptime method: []const u8,
+    params: Params(method),
+) !void {
+    try std.json.stringify(.{
+        .jsonrpc = "2.0",
+        .method = method,
+        .params = params,
+    }, .{}, writer);
+}
+
+pub fn send(
+    file: std.fs.File,
+    data: []const u8,
+) !void {
+    var header_buf: [64]u8 = undefined;
+    const header = try Header.writeToBuffer(.{ .content_length = data.len }, &header_buf);
+
+    var iovecs = [2]std.posix.iovec_const{
+        .{
+            .iov_base = header.ptr,
+            .iov_len = header.len,
+        },
+        .{
+            .iov_base = data.ptr,
+            .iov_len = data.len,
+        },
+    };
+
+    return file.writevAll(&iovecs);
+}
+
+pub fn waitForResponseToRequest(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    read_buffer: *std.ArrayListUnmanaged(u8),
+    id: i64,
+) !void {
+    while (true) {
+        const header = try Header.parse(reader);
+        try read_buffer.resize(allocator, header.content_length);
+
+        try reader.readNoEof(read_buffer.items);
+
+        const result = try std.json.parseFromSlice(
+            struct { id: ?lsp.RequestId },
+            allocator,
+            read_buffer.items,
+            .{
+                .ignore_unknown_fields = true,
+            },
+        );
+        defer result.deinit();
+
+        if (result.value.id) |received_id| {
+            if (received_id == .integer and received_id.integer == id) {
+                return;
+            }
+        }
+    }
 }
