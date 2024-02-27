@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sus</title>
+
+    <style>
+        html, body {
+            color: hsl(0, 0%, 90%);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            background-color: hsl(0, 0%, 10%);
+        }
+    </style>
+</head>
+<body>
+    <h1>Zig Language Server Fuzzer</h1>
+
+    <div>
+        <div>
+            <% for (const entry of entries) { %>
+                <div>
+                    <time datetime="<%= new Date(entry.created_at).toISOString() %>"></time>
+                    <code><%= entry.zig_version %></code>
+                    <code><%= entry.zls_version %></code>
+                    <pre><code><%- entry.message %></code></pre>
+                    <pre><code><%- entry.stderr %></code></pre>
+                </div>
+            <% } %>
+        </div>
+    </div>
+
+    <script>
+        const units = [
+            {unit: "year", ms: 31536000000},
+            {unit: "month", ms: 2628000000},
+            {unit: "day", ms: 86400000},
+            {unit: "hour", ms: 3600000},
+            {unit: "minute", ms: 60000},
+            {unit: "second", ms: 1000},
+        ];
+        const rtf = new Intl.RelativeTimeFormat("en", {numeric: "auto"});
+
+        function relativeTimeFromDates(relative, pivot = new Date()) {
+            if (!relative) return "";
+            const elapsed = relative.getTime() - pivot.getTime();
+            return relativeTimeFromElapsed(elapsed);
+        }
+
+        function relativeTimeFromElapsed(elapsed) {
+            for (const {unit, ms} of units) {
+                if (Math.abs(elapsed) >= ms || unit === "second") {
+                    return rtf.format(Math.round(elapsed / ms), unit);
+                }
+            }
+            return "";
+        }
+
+
+        [...document.querySelectorAll("time")].map(_ => _.innerText = relativeTimeFromDates(new Date(_.dateTime)));
+    </script>    
+</body>
+</html>

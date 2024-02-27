@@ -254,6 +254,7 @@ pub fn waitForResponseToRequest(
                 .ignore_unknown_fields = true,
             },
         );
+
         defer result.deinit();
 
         if (result.value.id) |received_id| {

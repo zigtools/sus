@@ -310,9 +310,6 @@ pub fn main() !void {
     }});
     defer gpa.free(principal_file_uri);
 
-    std.log.info("{s}", .{principal_file_uri});
-    // if (1 == 1) return;
-
     try env_map.put("NO_COLOR", "");
 
     while (true) {

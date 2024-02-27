@@ -15,6 +15,7 @@ sent_messages: []const Fuzzer.SentMessage,
 principal_file_source: []const u8,
 principal_file_uri: []const u8,
 config: Fuzzer.Config,
+random: std.rand.Random,
 
 zls_process: ChildProcess,
 id: i64 = 0,
@@ -31,6 +32,7 @@ pub fn fromFuzzer(fuzzer: *Fuzzer) Reducer {
         .config = fuzzer.config,
         .principal_file_source = fuzzer.principal_file_source,
         .principal_file_uri = fuzzer.principal_file_uri,
+        .random = fuzzer.random(),
 
         .zls_process = undefined,
         .id = 0,
@@ -58,7 +60,7 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     var zls_process = std.ChildProcess.init(&.{ reducer.config.zls_path, "--enable-debug-log" }, reducer.allocator);
     zls_process.env_map = reducer.env_map;
     zls_process.stdin_behavior = .Pipe;
-    zls_process.stderr_behavior = .Ignore;
+    zls_process.stderr_behavior = .Pipe;
     zls_process.stdout_behavior = .Pipe;
 
     try zls_process.spawn();
@@ -89,19 +91,125 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     } });
 }
 
+fn shutdownProcessCleanly(reducer: *Reducer) !void {
+    _ = try reducer.sendNotification("textDocument/didClose", .{
+        .textDocument = .{ .uri = reducer.principal_file_uri },
+    });
+
+    _ = try reducer.sendRequest("shutdown", {});
+    try reducer.sendNotification("exit", {});
+}
+
 pub fn reduce(reducer: *Reducer) !void {
     try reducer.createNewProcessAndInitialize();
 
-    for (0..reducer.sent_messages.len) |msg_idx| {
-        const msg = reducer.message(@intCast(msg_idx));
-        reducer.repeatMessage(msg) catch {
-            std.log.info("found cause! {d} {s}", .{ msg_idx, msg.data });
-        };
+    var poller = std.io.poll(reducer.allocator, enum { stderr }, .{ .stderr = reducer.zls_process.stderr.? });
+    defer poller.deinit();
+
+    const repro_msg_idx = blk: {
+        for (0..reducer.sent_messages.len) |msg_idx| {
+            const msg = reducer.message(@intCast(msg_idx));
+            reducer.repeatMessage(msg) catch {
+                _ = try poller.pollTimeout(0);
+                _ = try reducer.zls_process.wait();
+                break :blk msg_idx;
+            };
+
+            _ = try poller.pollTimeout(0);
+        }
+
+        try reducer.shutdownProcessCleanly();
+        _ = try reducer.zls_process.wait();
+
+        break :blk null;
+    };
+
+    if (repro_msg_idx == null) {
+        std.log.err("Could not reproduce!", .{});
+        return;
+    }
+
+    const stderr = try poller.fifo(.stderr).toOwnedSlice();
+    defer reducer.allocator.free(stderr);
+
+    const processed_stderr = if (std.mem.indexOf(u8, stderr, "panic:")) |panic_start|
+        stderr[panic_start..]
+    else
+        stderr;
+
+    const msg = reducer.message(@intCast(repro_msg_idx.?));
+
+    if (reducer.config.rpc) {
+        var iovecs: [9]std.os.iovec_const = undefined;
+
+        for ([_][]const u8{
+            std.mem.asBytes(&std.time.milliTimestamp()),
+
+            std.mem.asBytes(&@as(u8, @intCast(reducer.config.zig_env.value.version.len))),
+            reducer.config.zig_env.value.version,
+
+            std.mem.asBytes(&@as(u8, @intCast(reducer.config.zls_version.len))),
+            reducer.config.zls_version,
+
+            std.mem.asBytes(&@as(u16, @intCast(msg.data.len))),
+            msg.data,
+
+            std.mem.asBytes(&@as(u16, @intCast(processed_stderr.len))),
+            processed_stderr,
+        }, 0..) |val, i| {
+            iovecs[i] = .{
+                .iov_base = val.ptr,
+                .iov_len = val.len,
+            };
+        }
+
+        try std.io.getStdOut().writevAll(&iovecs);
+    } else {
+        var bytes: [32]u8 = undefined;
+        reducer.random.bytes(&bytes);
+
+        try std.fs.cwd().makePath("saved_logs");
+
+        const log_entry_path = try std.fmt.allocPrint(reducer.allocator, "saved_logs/{d}", .{std.fmt.fmtSliceHexLower(&bytes)});
+        defer reducer.allocator.free(log_entry_path);
+
+        const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
+        defer entry_file.close();
+
+        var timestamp_buf: [32]u8 = undefined;
+        var iovecs: [13]std.os.iovec_const = undefined;
+
+        for ([_][]const u8{
+            "timestamp: ",
+            try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.milliTimestamp()}),
+            "\n",
+            "zig version: ",
+            reducer.config.zig_env.value.version,
+            "\nzls version: ",
+            reducer.config.zls_version,
+            "\n\n",
+            "message:\n",
+            msg.data,
+            "\n\n",
+            "stderr:\n",
+            processed_stderr,
+        }, 0..) |val, i| {
+            iovecs[i] = .{
+                .iov_base = val.ptr,
+                .iov_len = val.len,
+            };
+        }
+
+        try entry_file.writevAll(&iovecs);
     }
 }
 
 fn repeatMessage(reducer: *Reducer, msg: Message) !void {
-    try reducer.zls_process.stdout.?.writer().writeAll(msg.data);
+    try utils.send(
+        reducer.zls_process.stdin.?,
+        msg.data,
+    );
+
     try utils.waitForResponseToRequest(
         reducer.allocator,
         reducer.buffered_reader.reader(),
@@ -147,4 +255,18 @@ fn sendNotification(reducer: *Reducer, comptime method: []const u8, params: util
         reducer.zls_process.stdin.?,
         reducer.write_buffer.items,
     );
+}
+
+fn readStderr(
+    allocator: std.mem.Allocator,
+    stderr: std.fs.File,
+    out: *std.ArrayListUnmanaged(u8),
+    keep_running: *std.atomic.Value(bool),
+) void {
+    var buffer: [std.mem.page_size]u8 = undefined;
+    while (keep_running.load(.Acquire)) {
+        const amt = stderr.reader().read(&buffer) catch break;
+        std.log.info("A: {s}", .{buffer[0..amt]});
+        out.appendSlice(allocator, buffer[0..amt]) catch break;
+    }
 }
