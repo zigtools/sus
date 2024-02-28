@@ -46,18 +46,18 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
     defer if (maybe_zig_path) |path| allocator.free(path);
 
-    var output_as_dir =
-        if (env_map.get("output_as_dir")) |str|
+    var rpc =
+        if (env_map.get("rpc")) |str|
         if (std.mem.eql(u8, str, "false"))
             false
         else if (std.mem.eql(u8, str, "true"))
             true
         else blk: {
-            std.log.warn("expected boolean (true|false) in env option 'output_as_dir' but got '{s}'", .{str});
-            break :blk Fuzzer.Config.Defaults.output_as_dir;
+            std.log.warn("expected boolean (true|false) in env option 'rpc' but got '{s}'", .{str});
+            break :blk Fuzzer.Config.Defaults.rpc;
         }
     else
-        Fuzzer.Config.Defaults.output_as_dir;
+        Fuzzer.Config.Defaults.rpc;
 
     var mode_name: ?ModeName = blk: {
         if (env_map.get("mode")) |mode_name| {
@@ -91,8 +91,8 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (std.mem.eql(u8, arg, "--help")) {
             try std.io.getStdOut().writeAll(usage);
             std.process.exit(0);
-        } else if (std.mem.eql(u8, arg, "--output-as-dir")) {
-            output_as_dir = true;
+        } else if (std.mem.eql(u8, arg, "--rpc")) {
+            rpc = true;
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
             if (maybe_zls_path) |path| {
                 allocator.free(path);
@@ -179,7 +179,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     errdefer zig_env.deinit();
 
     return .{
-        .output_as_dir = output_as_dir,
+        .rpc = rpc,
         .zls_path = zls_path,
         .mode_name = mode,
         .cycles_per_gen = cycles_per_gen,
@@ -202,7 +202,7 @@ const usage =
     \\General Options:
     \\  --help                Print this help and exit
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
-    \\  --output-as-dir       Output fuzzing results as directories (default: {s})
+    \\  --rpc                 Use RPC mode (default: {s})
     \\  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
     \\  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
@@ -211,7 +211,7 @@ const usage =
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
-    if (Fuzzer.Config.Defaults.output_as_dir) "true" else "false",
+    if (Fuzzer.Config.Defaults.rpc) "true" else "false",
     std.meta.fieldNames(ModeName).*,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
@@ -292,8 +292,35 @@ pub fn main() !void {
     var mode = try Mode.init(config.mode_name, gpa, &progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
+    const cwd_path = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd_path);
+
+    const principal_file_path = try std.fs.path.join(gpa, &.{ cwd_path, "tmp", "principal.zig" });
+    defer gpa.free(principal_file_path);
+
+    const principal_file_uri = try std.fmt.allocPrint(gpa, "{;@+/?#r}", .{std.Uri{
+        .scheme = "file",
+        .user = null,
+        .password = null,
+        .host = "",
+        .port = null,
+        .path = principal_file_path,
+        .query = null,
+        .fragment = null,
+    }});
+    defer gpa.free(principal_file_uri);
+
+    try env_map.put("NO_COLOR", "");
+
     while (true) {
-        var fuzzer = try Fuzzer.create(gpa, &progress, &mode, config);
+        var fuzzer = try Fuzzer.create(
+            gpa,
+            &progress,
+            &mode,
+            config,
+            &env_map,
+            principal_file_uri,
+        );
         errdefer {
             fuzzer.wait();
             fuzzer.destroy();
@@ -314,13 +341,14 @@ pub fn main() !void {
             }
 
             fuzzer.fuzz() catch {
-                progress.log("Restarting fuzzer...\n", .{});
+                progress.log("Reducing...\n", .{});
 
                 fuzzer.wait();
-                fuzzer.logPrincipal() catch {
-                    progress.log("failed to log principal\n", .{});
-                };
+                try fuzzer.reduce();
                 fuzzer.destroy();
+
+                progress.log("Restarting fuzzer...\n", .{});
+
                 break;
             };
         }

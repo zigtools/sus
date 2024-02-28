@@ -3,5 +3,7 @@
 /saved_logs
 /repos
 node_modules
-/.env
+.env
 d_*.log
+zig_install
+zls_repo
