@@ -173,8 +173,6 @@ pub fn closeCycle(fuzzer: *Fuzzer) !void {
 }
 
 pub fn reduce(fuzzer: *Fuzzer) !void {
-    std.log.info("Reducing...", .{});
-
     var reducer = Reducer.fromFuzzer(fuzzer);
     defer reducer.deinit();
 

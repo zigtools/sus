@@ -341,14 +341,15 @@ pub fn main() !void {
             }
 
             fuzzer.fuzz() catch {
-                progress.log("Restarting fuzzer...\n", .{});
+                progress.log("Reducing...\n", .{});
 
                 fuzzer.wait();
                 try fuzzer.reduce();
                 fuzzer.destroy();
 
+                progress.log("Restarting fuzzer...\n", .{});
+
                 break;
-                // return;
             };
         }
     }

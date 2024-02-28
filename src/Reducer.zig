@@ -9,7 +9,7 @@ const Reducer = @This();
 
 allocator: std.mem.Allocator,
 env_map: *const std.process.EnvMap,
-read_buffer: std.ArrayListUnmanaged(u8),
+read_buffer: *std.ArrayListUnmanaged(u8),
 sent_data: []const u8,
 sent_messages: []const Fuzzer.SentMessage,
 principal_file_source: []const u8,
@@ -26,7 +26,7 @@ pub fn fromFuzzer(fuzzer: *Fuzzer) Reducer {
     return .{
         .allocator = fuzzer.allocator,
         .env_map = fuzzer.env_map,
-        .read_buffer = fuzzer.read_buffer,
+        .read_buffer = &fuzzer.read_buffer,
         .sent_data = fuzzer.sent_data.items,
         .sent_messages = fuzzer.sent_messages.items,
         .config = fuzzer.config,
@@ -103,19 +103,24 @@ fn shutdownProcessCleanly(reducer: *Reducer) !void {
 pub fn reduce(reducer: *Reducer) !void {
     try reducer.createNewProcessAndInitialize();
 
-    var poller = std.io.poll(reducer.allocator, enum { stderr }, .{ .stderr = reducer.zls_process.stderr.? });
-    defer poller.deinit();
+    var stderr = std.ArrayListUnmanaged(u8){};
+    defer stderr.deinit(reducer.allocator);
+
+    var keep_running_stderr = std.atomic.Value(bool).init(true);
+    const stderr_thread = try std.Thread.spawn(.{}, readStderr, .{
+        reducer.allocator,
+        reducer.zls_process.stderr.?,
+        &stderr,
+        &keep_running_stderr,
+    });
 
     const repro_msg_idx = blk: {
         for (0..reducer.sent_messages.len) |msg_idx| {
             const msg = reducer.message(@intCast(msg_idx));
             reducer.repeatMessage(msg) catch {
-                _ = try poller.pollTimeout(0);
                 _ = try reducer.zls_process.wait();
                 break :blk msg_idx;
             };
-
-            _ = try poller.pollTimeout(0);
         }
 
         try reducer.shutdownProcessCleanly();
@@ -129,20 +134,29 @@ pub fn reduce(reducer: *Reducer) !void {
         return;
     }
 
-    const stderr = try poller.fifo(.stderr).toOwnedSlice();
-    defer reducer.allocator.free(stderr);
+    keep_running_stderr.store(false, .Release);
+    stderr_thread.join();
 
-    const processed_stderr = if (std.mem.indexOf(u8, stderr, "panic:")) |panic_start|
-        stderr[panic_start..]
+    const processed_stderr = if (std.mem.indexOf(u8, stderr.items, "panic:")) |panic_start|
+        stderr.items[panic_start..]
     else
-        stderr;
+        stderr.items;
 
     const msg = reducer.message(@intCast(repro_msg_idx.?));
 
     if (reducer.config.rpc) {
-        var iovecs: [9]std.os.iovec_const = undefined;
+        var iovecs: [12]std.os.iovec_const = undefined;
 
         for ([_][]const u8{
+            std.mem.asBytes(&@as(u32, @intCast(
+                8 +
+                    1 + reducer.config.zig_env.value.version.len +
+                    1 + reducer.config.zls_version.len +
+                    4 + reducer.principal_file_source.len +
+                    2 + msg.data.len +
+                    2 + processed_stderr.len,
+            ))),
+
             std.mem.asBytes(&std.time.milliTimestamp()),
 
             std.mem.asBytes(&@as(u8, @intCast(reducer.config.zig_env.value.version.len))),
@@ -150,6 +164,9 @@ pub fn reduce(reducer: *Reducer) !void {
 
             std.mem.asBytes(&@as(u8, @intCast(reducer.config.zls_version.len))),
             reducer.config.zls_version,
+
+            std.mem.asBytes(&@as(u32, @intCast(reducer.principal_file_source.len))),
+            reducer.principal_file_source,
 
             std.mem.asBytes(&@as(u16, @intCast(msg.data.len))),
             msg.data,
@@ -177,7 +194,7 @@ pub fn reduce(reducer: *Reducer) !void {
         defer entry_file.close();
 
         var timestamp_buf: [32]u8 = undefined;
-        var iovecs: [13]std.os.iovec_const = undefined;
+        var iovecs: [16]std.os.iovec_const = undefined;
 
         for ([_][]const u8{
             "timestamp: ",
@@ -187,6 +204,9 @@ pub fn reduce(reducer: *Reducer) !void {
             reducer.config.zig_env.value.version,
             "\nzls version: ",
             reducer.config.zls_version,
+            "\n\n",
+            "principal:\n",
+            reducer.principal_file_source,
             "\n\n",
             "message:\n",
             msg.data,
@@ -213,7 +233,7 @@ fn repeatMessage(reducer: *Reducer, msg: Message) !void {
     try utils.waitForResponseToRequest(
         reducer.allocator,
         reducer.buffered_reader.reader(),
-        &reducer.read_buffer,
+        reducer.read_buffer,
         msg.id,
     );
 }
@@ -237,7 +257,7 @@ fn sendRequest(reducer: *Reducer, comptime method: []const u8, params: utils.Par
     try utils.waitForResponseToRequest(
         reducer.allocator,
         reducer.buffered_reader.reader(),
-        &reducer.read_buffer,
+        reducer.read_buffer,
         request_id,
     );
 }
@@ -266,7 +286,6 @@ fn readStderr(
     var buffer: [std.mem.page_size]u8 = undefined;
     while (keep_running.load(.Acquire)) {
         const amt = stderr.reader().read(&buffer) catch break;
-        std.log.info("A: {s}", .{buffer[0..amt]});
         out.appendSlice(allocator, buffer[0..amt]) catch break;
     }
 }
