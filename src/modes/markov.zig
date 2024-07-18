@@ -151,15 +151,11 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
     return struct {
         table: Table = .{},
         allocator: mem.Allocator,
-        rand: std.rand.Random,
 
         pub const Iter = Iterator(byte_len);
         pub const Table = std.AutoArrayHashMapUnmanaged(Iter.Block, Follows);
         const Self = @This();
 
-        pub fn init(allocator: mem.Allocator, rand: std.rand.Random) Self {
-            return .{ .allocator = allocator, .rand = rand };
-        }
         pub fn deinit(self: *Self, allocator: mem.Allocator) void {
             var iter = self.table.iterator();
             while (iter.next()) |*m| m.value_ptr.deinit(allocator);
@@ -195,6 +191,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         /// previous input to feed().
         pub fn gen(
             self: *Self,
+            random: std.Random,
             writer: anytype,
             options: GenOptions,
         ) !void {
@@ -204,7 +201,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                 else
                     start_block)
             else blk: {
-                const id = self.rand.intRangeLessThan(usize, 0, self.table.count());
+                const id = random.intRangeLessThan(usize, 0, self.table.count());
                 break :blk self.table.keys()[id];
             };
             _ = try writer.write(&start_block);
@@ -227,7 +224,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                 };
 
                 // pick a random item
-                var r = self.rand.intRangeAtMost(usize, 0, follows.count());
+                var r = random.intRangeAtMost(usize, 0, follows.count());
                 const first_follow = follows.constItems()[0];
                 var c = first_follow.char;
                 if (debug) std.debug.print("follows {any} r {}\n", .{ follows.constItems(), r });
@@ -250,7 +247,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
 //     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 //     const allr = arena.allocator();
 //     var argit = try std.process.ArgIterator.initWithAllocator(allr);
-//     var prng = std.rand.DefaultPrng.init(@bitCast(u64, std.time.milliTimestamp()));
+//     var prng = std.Random.DefaultPrng.init(@bitCast(u64, std.time.milliTimestamp()));
 //     const M = Model(build_options.block_len, false);
 //     var model = M.init(allr, prng.random());
 //     _ = argit.next();

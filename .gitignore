@@ -1,9 +1,8 @@
-/zig-out
-/zig-cache
-/saved_logs
-/repos
+zig-out
+zig-cache
+.zig-cache
+saved_logs
+repos
 node_modules
 .env
 d_*.log
-zig_install
-zls_repo

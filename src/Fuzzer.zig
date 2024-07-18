@@ -1,10 +1,8 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const lsp = @import("lsp.zig");
-const ChildProcess = std.ChildProcess;
+const lsp = @import("lsp");
 const Mode = @import("mode.zig").Mode;
 const ModeName = @import("mode.zig").ModeName;
-const Header = @import("Header.zig");
 const Reducer = @import("Reducer.zig");
 
 const Fuzzer = @This();
@@ -49,18 +47,16 @@ pub const SentMessage = struct {
 };
 
 allocator: std.mem.Allocator,
-progress_node: *std.Progress.Node,
+progress_node: std.Progress.Node,
 mode: *Mode,
 config: Config,
-env_map: *const std.process.EnvMap,
-rand: std.rand.DefaultPrng,
+rand: std.Random.DefaultPrng,
 cycle: usize = 0,
 
-zls_process: ChildProcess,
+zls_process: std.process.Child,
 id: i64 = 0,
 
-buffered_reader: std.io.BufferedReader(4096, std.fs.File.Reader),
-read_buffer: std.ArrayListUnmanaged(u8) = .{},
+transport: lsp.TransportOverStdio,
 
 sent_data: std.ArrayListUnmanaged(u8) = .{},
 sent_messages: std.ArrayListUnmanaged(SentMessage) = .{},
@@ -71,20 +67,23 @@ principal_file_uri: []const u8,
 
 pub fn create(
     allocator: std.mem.Allocator,
-    progress: *std.Progress,
+    progress: std.Progress.Node,
     mode: *Mode,
     config: Config,
-    env_map: *const std.process.EnvMap,
     principal_file_uri: []const u8,
 ) !*Fuzzer {
     const fuzzer = try allocator.create(Fuzzer);
     errdefer allocator.destroy(fuzzer);
 
-    var seed: u64 = 0;
-    try std.os.getrandom(std.mem.asBytes(&seed));
+    const seed = std.crypto.random.int(u64);
 
-    var zls_process = std.ChildProcess.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
-    zls_process.env_map = env_map;
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    try env_map.put("NO_COLOR", "");
+
+    var zls_process = std.process.Child.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
+    zls_process.env_map = &env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Ignore;
     zls_process.stdout_behavior = .Pipe;
@@ -100,10 +99,9 @@ pub fn create(
         .progress_node = progress.start("fuzzer", 0),
         .mode = mode,
         .config = config,
-        .env_map = env_map,
-        .rand = std.rand.DefaultPrng.init(seed),
+        .rand = std.Random.DefaultPrng.init(seed),
         .zls_process = zls_process,
-        .buffered_reader = std.io.bufferedReader(zls_process.stdout.?.reader()),
+        .transport = lsp.TransportOverStdio.init(zls_process.stdout.?, zls_process.stdin.?),
         .sent_ids = sent_ids,
         .principal_file_uri = principal_file_uri,
     };
@@ -120,8 +118,6 @@ pub fn wait(fuzzer: *Fuzzer) void {
 pub fn destroy(fuzzer: *Fuzzer) void {
     const allocator = fuzzer.allocator;
 
-    fuzzer.read_buffer.deinit(allocator);
-
     fuzzer.sent_data.deinit(allocator);
     fuzzer.sent_messages.deinit(allocator);
     fuzzer.sent_ids.deinit(allocator);
@@ -132,14 +128,12 @@ pub fn destroy(fuzzer: *Fuzzer) void {
     allocator.destroy(fuzzer);
 }
 
-pub fn random(fuzzer: *Fuzzer) std.rand.Random {
+pub fn random(fuzzer: *Fuzzer) std.Random {
     return fuzzer.rand.random();
 }
 
 pub fn initCycle(fuzzer: *Fuzzer) !void {
-    fuzzer.progress_node.activate();
-
-    try fuzzer.sendRequest("initialize", lsp.InitializeParams{
+    try fuzzer.sendRequest("initialize", lsp.types.InitializeParams{
         .capabilities = .{},
     });
     try fuzzer.sendNotification("initialized", .{});
@@ -149,13 +143,13 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
     try settings.putNoClobber("skip_std_references", .{ .bool = true }); // references collection into std is very slow
     try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.value.zig_exe });
 
-    try fuzzer.sendNotification("workspace/didChangeConfiguration", lsp.DidChangeConfigurationParams{
+    try fuzzer.sendNotification("workspace/didChangeConfiguration", lsp.types.DidChangeConfigurationParams{
         .settings = .{ .object = settings },
     });
 
-    try fuzzer.sendNotification("textDocument/didOpen", lsp.DidOpenTextDocumentParams{ .textDocument = .{
+    try fuzzer.sendNotification("textDocument/didOpen", lsp.types.DidOpenTextDocumentParams{ .textDocument = .{
         .uri = fuzzer.principal_file_uri,
-        .languageId = .{ .custom_value = "zig" },
+        .languageId = "zig",
         .version = @intCast(fuzzer.cycle),
         .text = fuzzer.principal_file_source,
     } });
@@ -180,22 +174,15 @@ pub fn reduce(fuzzer: *Fuzzer) !void {
 }
 
 pub fn fuzz(fuzzer: *Fuzzer) !void {
-    fuzzer.progress_node.setCompletedItems(fuzzer.cycle);
     fuzzer.cycle += 1;
 
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
         // detch from cycle count to prevent pipe fillage on windows
         try utils.waitForResponseToRequests(
             fuzzer.allocator,
-            fuzzer.buffered_reader.reader(),
-            &fuzzer.read_buffer,
+            &fuzzer.transport,
             &fuzzer.sent_ids,
         );
-
-        // var arena_allocator = std.heap.ArenaAllocator.init(fuzzer.allocator);
-        // defer arena_allocator.deinit();
-        // const arena = arena_allocator.allocator();
-        // _ = arena; // autofix
 
         while (true) {
             fuzzer.allocator.free(fuzzer.principal_file_source);
@@ -203,19 +190,20 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
             if (std.unicode.utf8ValidateSlice(fuzzer.principal_file_source)) break;
         }
 
-        fuzzer.sent_data.items.len = 0;
-        fuzzer.sent_messages.items.len = 0;
-        fuzzer.sent_ids.clearRetainingCapacity();
+        fuzzer.sent_data.clearRetainingCapacity();
+        fuzzer.sent_messages.clearRetainingCapacity();
+        std.debug.assert(fuzzer.sent_ids.count() == 0);
 
-        try fuzzer.sendNotification("textDocument/didChange", lsp.DidChangeTextDocumentParams{
+        try fuzzer.sendNotification("textDocument/didChange", lsp.types.DidChangeTextDocumentParams{
             .textDocument = .{ .uri = fuzzer.principal_file_uri, .version = @intCast(fuzzer.cycle) },
-            .contentChanges = &[1]lsp.TextDocumentContentChangeEvent{
-                .{ .TextDocumentContentChangeWholeDocument = .{ .text = fuzzer.principal_file_source } },
+            .contentChanges = &[1]lsp.types.TextDocumentContentChangeEvent{
+                .{ .literal_1 = .{ .text = fuzzer.principal_file_source } },
             },
         });
     }
 
     try fuzzer.fuzzFeatureRandom(fuzzer.principal_file_uri, fuzzer.principal_file_source);
+    fuzzer.progress_node.completeOne();
 }
 
 pub const WhatToFuzz = enum {
@@ -352,7 +340,7 @@ pub fn fuzzFeatureRandom(
     }
 }
 
-fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Params(method)) !void {
+fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
     const start = fuzzer.sent_data.items.len;
 
     const request_id = fuzzer.id;
@@ -364,10 +352,7 @@ fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Param
         params,
     );
 
-    try utils.send(
-        fuzzer.zls_process.stdin.?,
-        fuzzer.sent_data.items[start..],
-    );
+    try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 
     try fuzzer.sent_messages.append(fuzzer.allocator, .{
         .id = request_id,
@@ -375,17 +360,10 @@ fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Param
         .end = @intCast(fuzzer.sent_data.items.len),
     });
 
-    fuzzer.sent_ids.putAssumeCapacityNoClobber(request_id, void{});
-
-    // try utils.waitForResponseToRequest(
-    //     fuzzer.allocator,
-    //     fuzzer.buffered_reader.reader(),
-    //     &fuzzer.read_buffer,
-    //     request_id,
-    // );
+    fuzzer.sent_ids.putAssumeCapacityNoClobber(request_id, {});
 }
 
-fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.Params(method)) !void {
+fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
     const start = fuzzer.sent_data.items.len;
 
     try utils.stringifyNotification(
@@ -394,8 +372,5 @@ fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: utils.
         params,
     );
 
-    return utils.send(
-        fuzzer.zls_process.stdin.?,
-        fuzzer.sent_data.items[start..],
-    );
+    try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 }

@@ -1,9 +1,8 @@
 const std = @import("std");
-const utils = @import("../utils.zig");
 
 const BestBehavior = @This();
 
-random: std.rand.DefaultPrng,
+random: std.Random.DefaultPrng,
 tests: std.ArrayListUnmanaged([]const u8),
 
 const usage =
@@ -24,18 +23,17 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 
 pub fn init(
     allocator: std.mem.Allocator,
-    progress: *std.Progress,
+    progress: std.Progress.Node,
     arg_it: *std.process.ArgIterator,
     envmap: std.process.EnvMap,
 ) !*BestBehavior {
     var bb = try allocator.create(BestBehavior);
     errdefer allocator.destroy(bb);
 
-    var seed: u64 = 0;
-    try std.os.getrandom(std.mem.asBytes(&seed));
+    const seed = std.crypto.random.int(u64);
 
     bb.* = .{
-        .random = std.rand.DefaultPrng.init(seed),
+        .random = std.Random.DefaultPrng.init(seed),
         .tests = .{},
     };
     errdefer bb.deinit(allocator);
@@ -58,7 +56,7 @@ pub fn init(
         fatalWithUsage("missing mode argument '--source-dir'", .{});
     }
 
-    progress.log(
+    std.debug.print(
         \\
         \\source-dir:     {s}
         \\
@@ -92,7 +90,6 @@ pub fn init(
     var file_buf = std.ArrayListUnmanaged(u8){};
     defer file_buf.deinit(allocator);
 
-    progress_node.activate();
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;

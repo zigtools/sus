@@ -7,7 +7,7 @@ const Markov = @This();
 const MarkovModel = markov.Model(build_options.block_len, false);
 
 model: MarkovModel,
-random: std.rand.DefaultPrng,
+random: std.Random.DefaultPrng,
 maxlen: u32 = Defaults.maxlen,
 
 const Defaults = struct {
@@ -36,21 +36,18 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 
 pub fn init(
     allocator: std.mem.Allocator,
-    progress: *std.Progress,
+    progress: std.Progress.Node,
     arg_it: *std.process.ArgIterator,
     envmap: std.process.EnvMap,
 ) !*Markov {
-    var seed: u64 = 0;
-    try std.os.getrandom(std.mem.asBytes(&seed));
+    const seed = std.crypto.random.int(u64);
 
     var mm = try allocator.create(Markov);
     mm.* = .{
-        .model = undefined, // set below
-        .random = std.rand.DefaultPrng.init(seed),
+        .model = .{ .allocator = allocator },
+        .random = std.Random.DefaultPrng.init(seed),
     };
     errdefer mm.deinit(allocator);
-
-    mm.model = MarkovModel.init(allocator, mm.random.random());
 
     var training_dir: ?[]const u8 = envmap.get("markov_training_dir");
 
@@ -80,7 +77,7 @@ pub fn init(
         fatalWithUsage("missing mode argument '--training-dir'", .{});
     }
 
-    progress.log(
+    std.debug.print(
         \\
         \\training-dir:   {s}
         \\maxlen:         {d}
@@ -112,7 +109,6 @@ pub fn init(
     var file_buf = std.ArrayListUnmanaged(u8){};
     defer file_buf.deinit(allocator);
 
-    progress_node.activate();
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
@@ -146,6 +142,6 @@ pub fn deinit(mm: *Markov, allocator: std.mem.Allocator) void {
 pub fn gen(mm: *Markov, allocator: std.mem.Allocator) ![]const u8 {
     var buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, mm.maxlen);
     errdefer buffer.deinit(allocator);
-    try mm.model.gen(buffer.writer(allocator), .{ .maxlen = mm.maxlen });
+    try mm.model.gen(mm.random.random(), buffer.writer(allocator), .{ .maxlen = mm.maxlen });
     return try buffer.toOwnedSlice(allocator);
 }

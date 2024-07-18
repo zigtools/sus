@@ -189,7 +189,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
 }
 
-// note: if you change this text, run `zig build run -- --help` and paste the contents into the README
+// if you change this text, run `zig build run -- --help` and paste the contents into the README
 const usage =
     std.fmt.comptimePrint(
     \\sus - ZLS fuzzing tooling
@@ -202,7 +202,7 @@ const usage =
     \\General Options:
     \\  --help                Print this help and exit
     \\  --mode [mode]         Specify fuzzing mode - one of {s}
-    \\  --rpc                 Use RPC mode (default: {s})
+    \\  --rpc                 Use RPC mode (default: {})
     \\  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
     \\  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
     \\  --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: {d})
@@ -211,8 +211,8 @@ const usage =
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
-    if (Fuzzer.Config.Defaults.rpc) "true" else "false",
     std.meta.fieldNames(ModeName).*,
+    Fuzzer.Config.Defaults.rpc,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
 
@@ -268,11 +268,10 @@ pub fn main() !void {
     var config = try initConfig(gpa, env_map, &arg_it);
     defer config.deinit(gpa);
 
-    var progress = std.Progress{
-        .terminal = null,
-    };
+    var progress = std.Progress.start(.{});
+    defer progress.end();
 
-    progress.log(
+    std.debug.print(
         \\zig-version:    {s}
         \\zls-version:    {s}
         \\zig-path:       {s}
@@ -289,7 +288,7 @@ pub fn main() !void {
         config.cycles_per_gen,
     });
 
-    var mode = try Mode.init(config.mode_name, gpa, &progress, &arg_it, env_map);
+    var mode = try Mode.init(config.mode_name, gpa, progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
     const cwd_path = try std.process.getCwdAlloc(gpa);
@@ -298,27 +297,18 @@ pub fn main() !void {
     const principal_file_path = try std.fs.path.join(gpa, &.{ cwd_path, "tmp", "principal.zig" });
     defer gpa.free(principal_file_path);
 
-    const principal_file_uri = try std.fmt.allocPrint(gpa, "{;@+/?#r}", .{std.Uri{
+    const principal_file_uri = try std.fmt.allocPrint(gpa, "{}", .{std.Uri{
         .scheme = "file",
-        .user = null,
-        .password = null,
-        .host = "",
-        .port = null,
-        .path = principal_file_path,
-        .query = null,
-        .fragment = null,
+        .path = .{ .raw = principal_file_path },
     }});
     defer gpa.free(principal_file_uri);
-
-    try env_map.put("NO_COLOR", "");
 
     while (true) {
         var fuzzer = try Fuzzer.create(
             gpa,
-            &progress,
+            progress,
             &mode,
             config,
-            &env_map,
             principal_file_uri,
         );
         errdefer {
@@ -329,10 +319,8 @@ pub fn main() !void {
         try fuzzer.initCycle();
 
         while (true) {
-            progress.maybeRefresh();
-
             if (fuzzer.cycle >= 100_000) {
-                progress.log("Fuzzer running too long with no result... restarting\n", .{});
+                std.debug.print("Fuzzer running too long with no result... restarting\n", .{});
 
                 try fuzzer.closeCycle();
                 fuzzer.wait();
@@ -341,13 +329,13 @@ pub fn main() !void {
             }
 
             fuzzer.fuzz() catch {
-                progress.log("Reducing...\n", .{});
+                std.debug.print("Reducing...\n", .{});
 
                 fuzzer.wait();
                 try fuzzer.reduce();
                 fuzzer.destroy();
 
-                progress.log("Restarting fuzzer...\n", .{});
+                std.debug.print("Restarting fuzzer...\n", .{});
 
                 break;
             };
