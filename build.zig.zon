@@ -1,6 +1,7 @@
 .{
     .name = "sus",
     .version = "0.1.0",
+    .minimum_zig_version = "0.13.0",
     .dependencies = .{
         .@"lsp-codegen" = .{
             .url = "git+https://github.com/zigtools/zig-lsp-codegen.git#e1f281f67ac2cb8c19d3cabe9cfae46fde691c56",
