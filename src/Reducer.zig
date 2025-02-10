@@ -121,7 +121,8 @@ pub fn reduce(reducer: *Reducer) !void {
         &keep_running_stderr,
     });
 
-    const msg: Message = for (0..reducer.sent_messages.len) |msg_idx| {
+    // Exclude the first two messages which are 'initialize' and 'initialized'
+    const msg: Message = for (@min(reducer.sent_messages.len, 2)..reducer.sent_messages.len) |msg_idx| {
         const msg = reducer.message(@intCast(msg_idx));
         reducer.repeatMessage(msg) catch {
             keep_running_stderr.store(false, .release);
