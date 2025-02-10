@@ -146,7 +146,7 @@ pub fn reduce(reducer: *Reducer) !void {
     if (reducer.config.rpc) {
         var iovecs: [12]std.posix.iovec_const = undefined;
 
-        for ([_][]const u8{
+        for ([iovecs.len][]const u8{
             std.mem.asBytes(&@as(u32, @intCast(
                 8 +
                     1 + reducer.config.zig_env.value.version.len +
@@ -172,8 +172,8 @@ pub fn reduce(reducer: *Reducer) !void {
 
             std.mem.asBytes(&@as(u16, @intCast(processed_stderr.len))),
             processed_stderr,
-        }, 0..) |val, i| {
-            iovecs[i] = .{ .base = val.ptr, .len = val.len };
+        }, &iovecs) |val, *iovec| {
+            iovec.* = .{ .base = val.ptr, .len = val.len };
         }
 
         try std.io.getStdOut().writevAll(&iovecs);
@@ -183,16 +183,16 @@ pub fn reduce(reducer: *Reducer) !void {
 
         try std.fs.cwd().makePath("saved_logs");
 
-        const log_entry_path = try std.fmt.allocPrint(reducer.allocator, "saved_logs/{d}", .{std.fmt.fmtSliceHexLower(&bytes)});
+        const log_entry_path = try std.fmt.allocPrint(reducer.allocator, "saved_logs/{d}.md", .{std.fmt.fmtSliceHexLower(&bytes)});
         defer reducer.allocator.free(log_entry_path);
 
         const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
         defer entry_file.close();
 
         var timestamp_buf: [32]u8 = undefined;
-        var iovecs: [16]std.posix.iovec_const = undefined;
+        var iovecs: [17]std.posix.iovec_const = undefined;
 
-        for ([_][]const u8{
+        for ([iovecs.len][]const u8{
             "timestamp: ",
             try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.milliTimestamp()}),
             "\n",
@@ -201,14 +201,15 @@ pub fn reduce(reducer: *Reducer) !void {
             "\nzls version: ",
             reducer.config.zls_version,
             "\n\n",
-            "principal:\n",
+            "principal:\n```zig\n",
             reducer.principal_file_source,
-            "\n\n",
-            "message:\n",
+            "\n```\n\n",
+            "message:\n```\n",
             msg.data,
-            "\n\n",
-            "stderr:\n",
+            "\n```\n\n",
+            "stderr:\n```\n",
             processed_stderr,
+            "\n```\n",
         }, &iovecs) |val, *iovec| {
             iovec.* = .{ .base = val.ptr, .len = val.len };
         }
