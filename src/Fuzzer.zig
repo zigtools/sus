@@ -215,170 +215,107 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
 }
 
 pub const WhatToFuzz = enum {
-    completion,
-    declaration,
-    definition,
-    type_definition,
-    implementation,
-    references,
-    signature_help,
-    hover,
-    semantic,
-    document_symbol,
-    folding_range,
-    formatting,
-    document_highlight,
-    inlay_hint,
-    // selection_range,
-    rename,
+    @"textDocument/completion",
+    @"textDocument/declaration",
+    @"textDocument/definition",
+    @"textDocument/typeDefinition",
+    @"textDocument/implementation",
+    @"textDocument/references",
+    @"textDocument/signatureHelp",
+    @"textDocument/hover",
+    @"textDocument/semanticTokens/full",
+    @"textDocument/documentSymbol",
+    @"textDocument/foldingRange",
+    @"textDocument/formatting",
+    @"textDocument/documentHighlight",
+    @"textDocument/inlayHint",
+    // @"textDocument/selectionRange",
+    @"textDocument/rename",
 };
 
 pub fn fuzzFeatureRandom(
     fuzzer: *Fuzzer,
     file_uri: []const u8,
     file_data: []const u8,
-) !void {
+) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
     switch (wtf) {
-        .completion => try fuzzer.sendRequest(
-            "textDocument/completion",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .declaration => try fuzzer.sendRequest(
-            "textDocument/declaration",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .definition => try fuzzer.sendRequest(
-            "textDocument/definition",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .type_definition => try fuzzer.sendRequest(
-            "textDocument/typeDefinition",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .implementation => try fuzzer.sendRequest(
-            "textDocument/implementation",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .references => try fuzzer.sendRequest(
-            "textDocument/references",
-            .{
-                .context = .{ .includeDeclaration = rand.boolean() },
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .signature_help => try fuzzer.sendRequest(
-            "textDocument/signatureHelp",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .hover => try fuzzer.sendRequest(
-            "textDocument/hover",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .semantic => try fuzzer.sendRequest(
-            "textDocument/semanticTokens/full",
+        inline .@"textDocument/completion",
+        .@"textDocument/declaration",
+        .@"textDocument/definition",
+        .@"textDocument/typeDefinition",
+        .@"textDocument/implementation",
+        .@"textDocument/signatureHelp",
+        .@"textDocument/hover",
+        .@"textDocument/documentHighlight",
+        => |method| try fuzzer.sendRequest(@tagName(method), .{
+            .textDocument = .{ .uri = file_uri },
+            .position = utils.randomPosition(rand, file_data),
+        }),
+
+        inline .@"textDocument/semanticTokens/full",
+        .@"textDocument/documentSymbol",
+        .@"textDocument/foldingRange",
+        => |method| try fuzzer.sendRequest(
+            @tagName(method),
             .{ .textDocument = .{ .uri = file_uri } },
         ),
-        .document_symbol => try fuzzer.sendRequest(
-            "textDocument/documentSymbol",
-            .{ .textDocument = .{ .uri = file_uri } },
-        ),
-        .folding_range => {
-            _ = try fuzzer.sendRequest(
-                "textDocument/foldingRange",
-                .{ .textDocument = .{ .uri = file_uri } },
-            );
-        },
-        .formatting => try fuzzer.sendRequest(
-            "textDocument/formatting",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .options = .{
-                    .tabSize = 4,
-                    .insertSpaces = true,
-                },
+
+        .@"textDocument/inlayHint" => try fuzzer.sendRequest("textDocument/inlayHint", .{
+            .textDocument = .{ .uri = file_uri },
+            .range = utils.randomRange(rand, file_data),
+        }),
+        .@"textDocument/references" => try fuzzer.sendRequest("textDocument/references", .{
+            .context = .{ .includeDeclaration = rand.boolean() },
+            .textDocument = .{ .uri = file_uri },
+            .position = utils.randomPosition(rand, file_data),
+        }),
+        .@"textDocument/formatting" => try fuzzer.sendRequest("textDocument/formatting", .{
+            .textDocument = .{ .uri = file_uri },
+            .options = .{
+                .tabSize = 4,
+                .insertSpaces = true,
             },
-        ),
-        .document_highlight => try fuzzer.sendRequest(
-            "textDocument/documentHighlight",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-            },
-        ),
-        .inlay_hint => try fuzzer.sendRequest(
-            "textDocument/inlayHint",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .range = utils.randomRange(rand, file_data),
-            },
-        ),
-        .rename => try fuzzer.sendRequest(
-            "textDocument/rename",
-            .{
-                .textDocument = .{ .uri = file_uri },
-                .position = utils.randomPosition(rand, file_data),
-                .newName = "helloWorld",
-            },
-        ),
+        }),
+        .@"textDocument/rename" => try fuzzer.sendRequest("textDocument/rename", .{
+            .textDocument = .{ .uri = file_uri },
+            .position = utils.randomPosition(rand, file_data),
+            .newName = "helloWorld",
+        }),
     }
 }
 
-fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
+fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
+    defer fuzzer.id += 1;
+
+    const request: lsp.TypedJsonRPCRequest(lsp.ParamsType(method)) = .{
+        .id = .{ .number = fuzzer.id },
+        .method = method,
+        .params = params,
+    };
+
     const start = fuzzer.sent_data.items.len;
-
-    const request_id = fuzzer.id;
-
-    try utils.stringifyRequest(
-        fuzzer.sent_data.writer(fuzzer.allocator),
-        &fuzzer.id,
-        method,
-        params,
-    );
-
+    try std.json.stringify(request, .{ .emit_null_optional_fields = false }, fuzzer.sent_data.writer(fuzzer.allocator));
     try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 
     try fuzzer.sent_messages.append(fuzzer.allocator, .{
-        .id = request_id,
+        .id = fuzzer.id,
         .start = @intCast(start),
         .end = @intCast(fuzzer.sent_data.items.len),
     });
 
-    fuzzer.sent_ids.putAssumeCapacityNoClobber(request_id, {});
+    fuzzer.sent_ids.putAssumeCapacityNoClobber(fuzzer.id, {});
 }
 
-fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
+fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
+    const notification: lsp.TypedJsonRPCNotification(lsp.ParamsType(method)) = .{
+        .method = method,
+        .params = params,
+    };
+
     const start = fuzzer.sent_data.items.len;
-
-    try utils.stringifyNotification(
-        fuzzer.sent_data.writer(fuzzer.allocator),
-        method,
-        params,
-    );
-
+    try std.json.stringify(notification, .{ .emit_null_optional_fields = false }, fuzzer.sent_data.writer(fuzzer.allocator));
     try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 }

@@ -169,37 +169,6 @@ pub fn randomRange(random: std.Random, data: []const u8) lsp.types.Range {
     return if (is_a_first) .{ .start = a, .end = b } else .{ .start = b, .end = a };
 }
 
-pub fn stringifyRequest(
-    writer: anytype,
-    id: *i64,
-    comptime method: []const u8,
-    params: lsp.ParamsType(method),
-) !void {
-    try std.json.stringify(.{
-        .jsonrpc = "2.0",
-        .id = id.*,
-        .method = method,
-        .params = switch (@TypeOf(params)) {
-            void => .{},
-            ?void => null,
-            else => params,
-        },
-    }, .{}, writer);
-    id.* +%= 1;
-}
-
-pub fn stringifyNotification(
-    writer: anytype,
-    comptime method: []const u8,
-    params: lsp.ParamsType(method),
-) !void {
-    try std.json.stringify(.{
-        .jsonrpc = "2.0",
-        .method = method,
-        .params = params,
-    }, .{}, writer);
-}
-
 pub fn waitForResponseToRequest(
     allocator: std.mem.Allocator,
     transport: *lsp.TransportOverStdio,
@@ -210,7 +179,7 @@ pub fn waitForResponseToRequest(
         defer allocator.free(json_message);
 
         const result = try std.json.parseFromSlice(
-            struct { id: ?lsp.JsonRPCMessage.ID },
+            struct { id: ?lsp.JsonRPCMessage.ID = null },
             allocator,
             json_message,
             .{
@@ -238,7 +207,7 @@ pub fn waitForResponseToRequests(
         defer allocator.free(json_message);
 
         const result = try std.json.parseFromSlice(
-            struct { id: ?lsp.JsonRPCMessage.ID },
+            struct { id: ?lsp.JsonRPCMessage.ID = null },
             allocator,
             json_message,
             .{

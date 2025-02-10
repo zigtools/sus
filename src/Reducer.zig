@@ -230,34 +230,33 @@ fn repeatMessage(reducer: *Reducer, msg: Message) !void {
 }
 
 fn sendRequest(reducer: *Reducer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
-    const request_id = reducer.id;
+    defer reducer.id += 1;
+
+    const request: lsp.TypedJsonRPCRequest(@TypeOf(params)) = .{
+        .id = .{ .number = reducer.id },
+        .method = method,
+        .params = params,
+    };
+
     reducer.write_buffer.clearRetainingCapacity();
-
-    try utils.stringifyRequest(
-        reducer.write_buffer.writer(reducer.allocator),
-        &reducer.id,
-        method,
-        params,
-    );
-
+    try std.json.stringify(request, .{ .emit_null_optional_fields = false }, reducer.write_buffer.writer(reducer.allocator));
     try reducer.transport.writeJsonMessage(reducer.write_buffer.items);
 
     try utils.waitForResponseToRequest(
         reducer.allocator,
         &reducer.transport,
-        request_id,
+        reducer.id,
     );
 }
 
 fn sendNotification(reducer: *Reducer, comptime method: []const u8, params: lsp.ParamsType(method)) !void {
+    const notification: lsp.TypedJsonRPCNotification(@TypeOf(params)) = .{
+        .method = method,
+        .params = params,
+    };
+
     reducer.write_buffer.clearRetainingCapacity();
-
-    try utils.stringifyNotification(
-        reducer.write_buffer.writer(reducer.allocator),
-        method,
-        params,
-    );
-
+    try std.json.stringify(notification, .{ .emit_null_optional_fields = false }, reducer.write_buffer.writer(reducer.allocator));
     try reducer.transport.writeJsonMessage(reducer.write_buffer.items);
 }
 
