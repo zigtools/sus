@@ -190,8 +190,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
 }
 
 // if you change this text, run `zig build run -- --help` and paste the contents into the README
-const usage =
-    std.fmt.comptimePrint(
+const usage = std.fmt.comptimePrint(
     \\sus - ZLS fuzzing tooling
     \\
     \\Usage:   sus [options] --mode [mode] -- <mode specific arguments>

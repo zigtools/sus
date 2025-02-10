@@ -8,6 +8,7 @@ tests: std.ArrayListUnmanaged([]const u8),
 const usage =
     \\Usage best behavior Mode:
     \\     --source-dir   - directory to be used for fuzzing. searched for .zig files recursively.
+    \\
 ;
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {

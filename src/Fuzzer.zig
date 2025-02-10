@@ -7,7 +7,7 @@ const Reducer = @import("Reducer.zig");
 
 const Fuzzer = @This();
 
-// note: if you add or change config options, update the usage in main.zig then
+// if you add or change config options, update the usage in main.zig then
 // run `zig build run -- --help` and paste the contents into the README
 pub const Config = struct {
     rpc: bool,
