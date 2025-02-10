@@ -82,7 +82,15 @@ pub fn create(
 
     try env_map.put("NO_COLOR", "");
 
-    var zls_process = std.process.Child.init(&.{ config.zls_path, "--enable-debug-log" }, allocator);
+    const zls_cli_revamp_version = comptime std.SemanticVersion.parse("0.14.0-50+3354fdc") catch unreachable;
+    const zls_version = try std.SemanticVersion.parse(config.zls_version);
+
+    const argv: []const []const u8 = if (zls_version.order(zls_cli_revamp_version) == .lt)
+        &.{ config.zls_path, "--enable-debug-log" }
+    else
+        &.{ config.zls_path, "--log-level", "debug" };
+
+    var zls_process = std.process.Child.init(argv, allocator);
     zls_process.env_map = &env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Ignore;
