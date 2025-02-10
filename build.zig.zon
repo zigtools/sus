@@ -3,8 +3,8 @@
     .version = "0.1.0",
     .dependencies = .{
         .@"lsp-codegen" = .{
-            .url = "git+https://github.com/zigtools/zig-lsp-codegen.git#13d1d9e44e1c602953437438b163950298ff8d85",
-            .hash = "1220518fd5cefa481497bb3484ffab48a42e69c31088e37f52ea361f9ce884d2131c",
+            .url = "git+https://github.com/zigtools/zig-lsp-codegen.git#e1f281f67ac2cb8c19d3cabe9cfae46fde691c56",
+            .hash = "12208e12a10e78de19f140acae65e6edc20189459dd208d5f6b7afdf0aa894113d1b",
         },
     },
     .paths = .{
