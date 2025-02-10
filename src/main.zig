@@ -246,15 +246,8 @@ pub fn findInPath(allocator: std.mem.Allocator, env_map: std.process.EnvMap, sub
     return null;
 }
 
-const stack_trace_frames: usize = switch (builtin.mode) {
-    .Debug => 16,
-    else => 0,
-};
-
 pub fn main() !void {
-    var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = stack_trace_frames,
-    }){};
+    var general_purpose_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer _ = general_purpose_allocator.deinit();
     const gpa = general_purpose_allocator.allocator();
 
