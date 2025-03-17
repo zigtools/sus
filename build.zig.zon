@@ -1,11 +1,11 @@
 .{
-    .name = "sus",
+    .name = .sus,
     .version = "0.1.0",
-    .minimum_zig_version = "0.13.0",
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
-        .@"lsp-codegen" = .{
-            .url = "git+https://github.com/zigtools/zig-lsp-codegen.git#e1f281f67ac2cb8c19d3cabe9cfae46fde691c56",
-            .hash = "12208e12a10e78de19f140acae65e6edc20189459dd208d5f6b7afdf0aa894113d1b",
+        .lsp_codegen = .{
+            .url = "git+https://github.com/zigtools/zig-lsp-codegen.git#063a98c13a2293d8654086140813bdd1de6501bc",
+            .hash = "lsp_codegen-0.1.0-CMjjo0ZXCQB-rAhPYrlfzzpU0u0u2MeGvUucZ-_g32eg",
         },
     },
     .paths = .{
@@ -15,4 +15,5 @@
         "LICENSE",
         "README.md",
     },
+    .fingerprint = 0x32b2a22ef62d2b4b, // Changing this has security and trust implications.
 }

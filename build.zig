@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(u8, "block_len", block_len);
 
-    const lsp_module = b.dependency("lsp-codegen", .{}).module("lsp");
+    const lsp_module = b.dependency("lsp_codegen", .{}).module("lsp");
 
     const exe = b.addExecutable(.{
         .name = "sus",
