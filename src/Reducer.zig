@@ -54,7 +54,7 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     var env_map = try std.process.getEnvMap(reducer.allocator);
     defer env_map.deinit();
 
-    try env_map.put("NO_COLOR", "");
+    try env_map.put("NO_COLOR", "1");
 
     const zls_cli_revamp_version = comptime std.SemanticVersion.parse("0.14.0-50+3354fdc") catch unreachable;
     const zls_version = try std.SemanticVersion.parse(reducer.config.zls_version);
