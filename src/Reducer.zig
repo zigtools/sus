@@ -182,12 +182,14 @@ pub fn reduce(reducer: *Reducer) !void {
         var bytes: [32]u8 = undefined;
         reducer.random.bytes(&bytes);
 
-        try std.fs.cwd().makePath("saved_logs");
+        var file_name_buffer: [bytes.len * 2 + ".md".len]u8 = undefined;
+        const file_name = std.fmt.bufPrint(&file_name_buffer, "{}.md", .{std.fmt.fmtSliceHexLower(&bytes)}) catch unreachable;
+        std.debug.assert(file_name.len == file_name_buffer.len);
 
-        const log_entry_path = try std.fmt.allocPrint(reducer.allocator, "saved_logs/{d}.md", .{std.fmt.fmtSliceHexLower(&bytes)});
-        defer reducer.allocator.free(log_entry_path);
+        var logs_dir = try std.fs.cwd().makeOpenPath("saved_logs", .{});
+        defer logs_dir.close();
 
-        const entry_file = try std.fs.cwd().createFile(log_entry_path, .{});
+        const entry_file = try logs_dir.createFile(file_name, .{});
         defer entry_file.close();
 
         var timestamp_buf: [32]u8 = undefined;
