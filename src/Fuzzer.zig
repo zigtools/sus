@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const utils = @import("utils.zig");
 const lsp = @import("lsp");
 const Mode = @import("mode.zig").Mode;
@@ -88,7 +90,7 @@ pub fn create(
     const argv: []const []const u8 = if (zls_version.order(zls_cli_revamp_version) == .lt)
         &.{ config.zls_path, "--enable-debug-log" }
     else
-        &.{ config.zls_path, "--log-level", "debug" };
+        &.{ config.zls_path, "--log-file", if (builtin.target.os.tag == .windows) "nul" else "/dev/null", "--disable-lsp-logs" };
 
     var zls_process = std.process.Child.init(argv, allocator);
     zls_process.env_map = &env_map;

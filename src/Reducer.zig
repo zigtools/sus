@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const utils = @import("utils.zig");
 const Fuzzer = @import("Fuzzer.zig");
@@ -62,7 +63,7 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     const argv: []const []const u8 = if (zls_version.order(zls_cli_revamp_version) == .lt)
         &.{ reducer.config.zls_path, "--enable-debug-log" }
     else
-        &.{ reducer.config.zls_path, "--log-level", "debug" };
+        &.{ reducer.config.zls_path, "--log-file", if (builtin.target.os.tag == .windows) "nul" else "/dev/null", "--disable-lsp-logs" };
 
     var zls_process = std.process.Child.init(argv, reducer.allocator);
     zls_process.env_map = &env_map;
