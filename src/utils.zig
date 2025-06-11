@@ -139,34 +139,26 @@ pub fn randomize(
 
 pub fn randomPosition(random: std.Random, data: []const u8) lsp.types.Position {
     // TODO: Consider offsets
-
-    const line_count = std.mem.count(u8, data, "\n");
-    const line = if (line_count == 0) 0 else random.intRangeLessThan(usize, 0, line_count);
-    var lines = std.mem.splitScalar(u8, data, '\n');
-
-    var character: usize = 0;
-
-    var index: usize = 0;
-    while (lines.next()) |line_content| : (index += 1) {
-        if (index == line) {
-            character = if (line_content.len == 0) 0 else random.intRangeLessThan(usize, 0, line_content.len);
-            break;
-        }
-    }
-
-    return .{
-        .line = @intCast(line),
-        .character = @intCast(character),
-    };
+    var index = random.uintAtMost(usize, data.len);
+    while (index != 0 and index < data.len and !isFirstUtf8Byte(data[index])) index -= 1;
+    return lsp.offsets.indexToPosition(data, index, .@"utf-16");
 }
 
 pub fn randomRange(random: std.Random, data: []const u8) lsp.types.Range {
-    const a = randomPosition(random, data);
-    const b = randomPosition(random, data);
+    // TODO: Consider offsets
+    var loc: lsp.offsets.Loc = .{
+        .start = random.uintAtMost(usize, data.len),
+        .end = random.uintAtMost(usize, data.len),
+    };
+    while (loc.start != 0 and loc.start < data.len and !isFirstUtf8Byte(data[loc.start])) loc.start -= 1;
+    while (loc.end != 0 and loc.end < data.len and !isFirstUtf8Byte(data[loc.end])) loc.end -= 1;
+    if (loc.start > loc.end) std.mem.swap(usize, &loc.start, &loc.end);
 
-    const is_a_first = a.line < b.line or (a.line == b.line and a.character < b.character);
+    return lsp.offsets.locToRange(data, loc, .@"utf-16");
+}
 
-    return if (is_a_first) .{ .start = a, .end = b } else .{ .start = b, .end = a };
+fn isFirstUtf8Byte(byte: u8) bool {
+    return byte & 0b11000000 != 0b10000000;
 }
 
 pub fn waitForResponseToRequest(
