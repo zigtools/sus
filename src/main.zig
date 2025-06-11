@@ -47,17 +47,14 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     defer if (maybe_zig_path) |path| allocator.free(path);
 
     var rpc =
-        if (env_map.get("rpc")) |str|
-        if (std.mem.eql(u8, str, "false"))
+        if (env_map.get("rpc")) |str| if (std.mem.eql(u8, str, "false"))
             false
         else if (std.mem.eql(u8, str, "true"))
             true
         else blk: {
             std.log.warn("expected boolean (true|false) in env option 'rpc' but got '{s}'", .{str});
             break :blk Fuzzer.Config.Defaults.rpc;
-        }
-    else
-        Fuzzer.Config.Defaults.rpc;
+        } else Fuzzer.Config.Defaults.rpc;
 
     var mode_name: ?ModeName = blk: {
         if (env_map.get("mode")) |mode_name| {
