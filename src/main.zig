@@ -243,10 +243,16 @@ pub fn findInPath(allocator: std.mem.Allocator, env_map: std.process.EnvMap, sub
     return null;
 }
 
+var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+
 pub fn main() !void {
-    var general_purpose_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    defer _ = general_purpose_allocator.deinit();
-    const gpa = general_purpose_allocator.allocator();
+    const gpa, const is_debug = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
+        .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
+    };
+    defer if (is_debug) {
+        _ = debug_allocator.deinit();
+    };
 
     var env_map: std.process.EnvMap = loadEnv(gpa) catch std.process.EnvMap.init(gpa);
     defer env_map.deinit();
