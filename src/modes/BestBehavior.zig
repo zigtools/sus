@@ -3,7 +3,7 @@ const std = @import("std");
 const BestBehavior = @This();
 
 random: std.Random.DefaultPrng,
-tests: std.ArrayListUnmanaged([]const u8),
+tests: std.ArrayList([]const u8),
 
 const usage =
     \\Usage best behavior Mode:
@@ -12,7 +12,7 @@ const usage =
 ;
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writeAll(usage) catch {};
+    std.fs.File.stderr().writeAll(usage) catch {};
     std.log.err(format, args);
     std.process.exit(1);
 }
@@ -34,8 +34,8 @@ pub fn init(
     const seed = std.crypto.random.int(u64);
 
     bb.* = .{
-        .random = std.Random.DefaultPrng.init(seed),
-        .tests = .{},
+        .random = .init(seed),
+        .tests = .empty,
     };
     errdefer bb.deinit(allocator);
 
@@ -43,7 +43,7 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdOut().writeAll(usage);
+            try std.fs.File.stdout().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--source-dir")) {
             source_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --source-dir", .{});
@@ -88,14 +88,15 @@ pub fn init(
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
-    var file_buf = std.ArrayListUnmanaged(u8){};
+    var file_buf: std.ArrayList(u8) = .empty;
     defer file_buf.deinit(allocator);
 
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
 
-        // std.log.info("found file {s}", .{entry.path});
+        const node = progress_node.start(entry.basename, 0);
+        defer node.end();
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
@@ -107,8 +108,6 @@ pub fn init(
 
         try bb.tests.ensureUnusedCapacity(allocator, 1);
         bb.tests.appendAssumeCapacity(try file_buf.toOwnedSlice(allocator));
-
-        progress_node.completeOne();
     }
 
     return bb;

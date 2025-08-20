@@ -3,9 +3,10 @@ const builtin = @import("builtin");
 const Fuzzer = @import("Fuzzer.zig");
 const Mode = @import("mode.zig").Mode;
 const ModeName = @import("mode.zig").ModeName;
+const client = @import("Client.zig");
 
 fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
-    var envmap: std.process.EnvMap = std.process.getEnvMap(allocator) catch std.process.EnvMap.init(allocator);
+    var envmap: std.process.EnvMap = std.process.getEnvMap(allocator) catch .init(allocator);
     errdefer envmap.deinit();
 
     const env_content = std.fs.cwd().readFileAlloc(allocator, ".env", std.math.maxInt(usize)) catch |e| switch (e) {
@@ -62,8 +63,8 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                 break :blk mode;
             } else {
                 std.log.warn(
-                    "expected mode name (one of {s}) in env option 'mode' but got '{s}'",
-                    .{ std.meta.fieldNames(ModeName).*, mode_name },
+                    "expected mode name (one of {f}) in env option 'mode' but got '{s}'",
+                    .{ std.json.fmt(std.meta.fieldNames(ModeName).*, .{}), mode_name },
                 );
             }
         }
@@ -86,7 +87,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (std.mem.eql(u8, arg, "--")) break; // all argument after '--' are mode specific arguments
 
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdOut().writeAll(usage);
+            try std.fs.File.stdout().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--rpc")) {
             rpc = true;
@@ -114,7 +115,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     }
 
     if (num_args == 0 and (maybe_zls_path == null or mode_name == null)) {
-        try std.io.getStdErr().writeAll(usage);
+        std.fs.File.stderr().writeAll(usage) catch {};
         std.process.exit(1);
     }
 
@@ -123,10 +124,12 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     const mode = mode_name orelse fatalWithUsage("must specify --mode", .{});
 
     const zls_version = blk: {
-        const result = try std.process.Child.run(.{
+        const result = std.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ zls_path, "--version" },
-        });
+        }) catch |err| {
+            std.process.fatal("Failed to run '{s} --version' command: {}", .{ zls_path, err });
+        };
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -139,41 +142,71 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     };
     errdefer allocator.free(zls_version);
 
-    const zig_env = blk: {
-        const result = try std.process.Child.run(.{
+    var zig_env_arena: std.heap.ArenaAllocator = .init(allocator);
+    errdefer zig_env_arena.deinit();
+
+    const zig_env: Fuzzer.Config.ZigEnv = blk: {
+        const result = std.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ zig_path, "env" },
-        });
+        }) catch |err| {
+            std.process.fatal("failed to run '{s} env' command: {}", .{ zls_path, err });
+        };
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
         switch (result.term) {
-            .Exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
-            else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
+            .Exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zls_path, code }),
+            else => fatal("command '{s} env' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
         }
 
-        var scanner = std.json.Scanner.initCompleteInput(allocator, result.stdout);
-        defer scanner.deinit();
+        if (std.mem.startsWith(u8, result.stdout, "{")) {
+            var scanner: std.json.Scanner = .initCompleteInput(allocator, result.stdout);
+            defer scanner.deinit();
 
-        var diagnostics: std.json.Diagnostics = .{};
-        scanner.enableDiagnostics(&diagnostics);
+            var diagnostics: std.json.Diagnostics = .{};
+            scanner.enableDiagnostics(&diagnostics);
 
-        break :blk std.json.parseFromTokenSource(Fuzzer.Config.ZigEnv, allocator, &scanner, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_always,
-        }) catch |err| {
-            std.log.err(
-                \\command '{s} env' did not respond with valid json
-                \\stdout:
-                \\{s}
-                \\stderr:
-                \\{s}
-                \\On Line {d}, Column {d}: {}
-            , .{ zig_path, result.stdout, result.stderr, diagnostics.getLine(), diagnostics.getColumn(), err });
-            std.process.exit(1);
-        };
+            break :blk std.json.parseFromTokenSourceLeaky(
+                Fuzzer.Config.ZigEnv,
+                zig_env_arena.allocator(),
+                &scanner,
+                .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+            ) catch |err| {
+                std.log.err(
+                    \\command '{s} env' did not respond with valid json or zon
+                    \\stdout:
+                    \\{s}
+                    \\stderr:
+                    \\{s}
+                    \\On Line {d}, Column {d}: {}
+                , .{ zig_path, result.stdout, result.stderr, diagnostics.getLine(), diagnostics.getColumn(), err });
+                std.process.exit(1);
+            };
+        } else {
+            const stdout = try allocator.dupeZ(u8, result.stdout);
+            defer allocator.free(stdout);
+
+            var diagnostics: std.zon.parse.Diagnostics = .{};
+            break :blk std.zon.parse.fromSlice(
+                Fuzzer.Config.ZigEnv,
+                zig_env_arena.allocator(),
+                stdout,
+                &diagnostics,
+                .{ .ignore_unknown_fields = true },
+            ) catch {
+                std.log.err(
+                    \\command '{s} env' did not respond with valid json or zon
+                    \\stdout:
+                    \\{s}
+                    \\stderr:
+                    \\{s}
+                    \\{f}
+                , .{ zig_path, result.stdout, result.stderr, diagnostics });
+                std.process.exit(1);
+            };
+        }
     };
-    errdefer zig_env.deinit();
 
     return .{
         .rpc = rpc,
@@ -181,6 +214,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         .mode_name = mode,
         .cycles_per_gen = cycles_per_gen,
 
+        .zig_env_arena = zig_env_arena.state,
         .zig_env = zig_env,
         .zls_version = zls_version,
     };
@@ -197,7 +231,7 @@ const usage = std.fmt.comptimePrint(
     \\
     \\General Options:
     \\  --help                Print this help and exit
-    \\  --mode [mode]         Specify fuzzing mode - one of {s}
+    \\  --mode [mode]         Specify fuzzing mode - one of {f}
     \\  --rpc                 Use RPC mode (default: {})
     \\  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
     \\  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
@@ -207,15 +241,14 @@ const usage = std.fmt.comptimePrint(
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
-    std.meta.fieldNames(ModeName).*,
+    std.json.fmt(std.meta.fieldNames(ModeName).*, .{}),
     Fuzzer.Config.Defaults.rpc,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writeAll(usage) catch {};
-    std.log.err(format, args);
-    std.process.exit(1);
+    std.fs.File.stderr().writeAll(usage) catch {};
+    std.process.fatal(format, args);
 }
 
 fn fatal(comptime format: []const u8, args: anytype) noreturn {
@@ -254,10 +287,10 @@ pub fn main() !void {
         _ = debug_allocator.deinit();
     };
 
-    var env_map: std.process.EnvMap = loadEnv(gpa) catch std.process.EnvMap.init(gpa);
+    var env_map: std.process.EnvMap = loadEnv(gpa) catch .init(gpa);
     defer env_map.deinit();
 
-    var arg_it = try std.process.ArgIterator.initWithAllocator(gpa);
+    var arg_it: std.process.ArgIterator = try .initWithAllocator(gpa);
     defer arg_it.deinit();
 
     var config = try initConfig(gpa, env_map, &arg_it);
@@ -275,15 +308,15 @@ pub fn main() !void {
         \\cycles-per-gen: {d}
         \\
     , .{
-        config.zig_env.value.version,
+        config.zig_env.version,
         config.zls_version,
-        config.zig_env.value.zig_exe,
+        config.zig_env.zig_exe,
         config.zls_path,
         @tagName(config.mode_name),
         config.cycles_per_gen,
     });
 
-    var mode = try Mode.init(config.mode_name, gpa, progress, &arg_it, env_map);
+    var mode: Mode = try .init(config.mode_name, gpa, progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
     const cwd_path = try std.process.getCwdAlloc(gpa);
@@ -292,14 +325,14 @@ pub fn main() !void {
     const principal_file_path = try std.fs.path.join(gpa, &.{ cwd_path, "tmp", "principal.zig" });
     defer gpa.free(principal_file_path);
 
-    const principal_file_uri = try std.fmt.allocPrint(gpa, "{}", .{std.Uri{
+    const principal_file_uri = try std.fmt.allocPrint(gpa, "{f}", .{std.Uri{
         .scheme = "file",
         .path = .{ .raw = principal_file_path },
     }});
     defer gpa.free(principal_file_uri);
 
     while (true) {
-        var fuzzer = try Fuzzer.create(
+        var fuzzer: *Fuzzer = try .create(
             gpa,
             progress,
             &mode,

@@ -24,7 +24,7 @@ const usage = std.fmt.comptimePrint(
 });
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writeAll(usage) catch {};
+    std.fs.File.stderr().writeAll(usage) catch {};
     std.log.err(format, args);
     std.process.exit(1);
 }
@@ -45,7 +45,7 @@ pub fn init(
     var mm = try allocator.create(Markov);
     mm.* = .{
         .model = .{ .allocator = allocator },
-        .random = std.Random.DefaultPrng.init(seed),
+        .random = .init(seed),
     };
     errdefer mm.deinit(allocator);
 
@@ -60,7 +60,7 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdOut().writeAll(usage);
+            try std.fs.File.stdout().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--training-dir")) {
             training_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --training-dir", .{});
@@ -106,14 +106,15 @@ pub fn init(
     var walker = try iterable_dir.walk(allocator);
     defer walker.deinit();
 
-    var file_buf = std.ArrayListUnmanaged(u8){};
+    var file_buf: std.ArrayList(u8) = .empty;
     defer file_buf.deinit(allocator);
 
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
 
-        // std.log.info("found file: {s}", .{entry.path});
+        const node = progress_node.start(entry.basename, 0);
+        defer node.end();
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
@@ -124,8 +125,6 @@ pub fn init(
         _ = try file.readAll(file_buf.items);
 
         try mm.model.feed(file_buf.items);
-
-        progress_node.completeOne();
     }
 
     mm.model.prep();
@@ -139,9 +138,9 @@ pub fn deinit(mm: *Markov, allocator: std.mem.Allocator) void {
     allocator.destroy(mm);
 }
 
-pub fn gen(mm: *Markov, allocator: std.mem.Allocator) ![]const u8 {
-    var buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, mm.maxlen);
-    errdefer buffer.deinit(allocator);
-    try mm.model.gen(mm.random.random(), buffer.writer(allocator), .{ .maxlen = mm.maxlen });
-    return try buffer.toOwnedSlice(allocator);
+pub fn gen(mm: *Markov, allocator: std.mem.Allocator) error{ OutOfMemory, WriteFailed }![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    try mm.model.gen(mm.random.random(), &aw.writer, .{ .maxlen = mm.maxlen });
+    return try aw.toOwnedSlice();
 }

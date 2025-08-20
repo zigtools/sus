@@ -16,9 +16,10 @@ config: Fuzzer.Config,
 random: std.Random,
 
 zls_process: std.process.Child,
-transport: lsp.TransportOverStdio,
+transport_read_buffer: [256]u8 = undefined,
+stdio_transport: lsp.Transport.Stdio,
 id: i64 = 0,
-write_buffer: std.ArrayListUnmanaged(u8) = .{},
+write_buffer: std.ArrayList(u8) = .empty,
 
 pub fn fromFuzzer(fuzzer: *Fuzzer) Reducer {
     return .{
@@ -31,7 +32,7 @@ pub fn fromFuzzer(fuzzer: *Fuzzer) Reducer {
         .random = fuzzer.random(),
 
         .zls_process = undefined,
-        .transport = undefined,
+        .stdio_transport = undefined,
     };
 }
 
@@ -65,7 +66,7 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     else
         &.{ reducer.config.zls_path, "--log-file", if (builtin.target.os.tag == .windows) "nul" else "/dev/null", "--disable-lsp-logs" };
 
-    var zls_process = std.process.Child.init(argv, reducer.allocator);
+    var zls_process: std.process.Child = .init(argv, reducer.allocator);
     zls_process.env_map = &env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Pipe;
@@ -75,17 +76,17 @@ fn createNewProcessAndInitialize(reducer: *Reducer) !void {
     errdefer _ = zls_process.kill() catch @panic("failed to kill zls process");
 
     reducer.zls_process = zls_process;
-    reducer.transport = lsp.TransportOverStdio.init(reducer.zls_process.stdout.?, reducer.zls_process.stdin.?);
+    reducer.stdio_transport = .init(&reducer.transport_read_buffer, reducer.zls_process.stdout.?, reducer.zls_process.stdin.?);
 
     try reducer.sendRequest("initialize", lsp.types.InitializeParams{
         .capabilities = .{},
     });
     try reducer.sendNotification("initialized", .{});
 
-    var settings = std.json.ObjectMap.init(reducer.allocator);
+    var settings: std.json.ObjectMap = .init(reducer.allocator);
     defer settings.deinit();
     try settings.putNoClobber("skip_std_references", .{ .bool = true }); // references collection into std is very slow
-    try settings.putNoClobber("zig_exe_path", .{ .string = reducer.config.zig_env.value.zig_exe });
+    try settings.putNoClobber("zig_exe_path", .{ .string = reducer.config.zig_env.zig_exe });
 
     try reducer.sendNotification("workspace/didChangeConfiguration", lsp.types.DidChangeConfigurationParams{
         .settings = .{ .object = settings },
@@ -111,11 +112,11 @@ fn shutdownProcessCleanly(reducer: *Reducer) !void {
 pub fn reduce(reducer: *Reducer) !void {
     try reducer.createNewProcessAndInitialize();
 
-    var stderr = std.ArrayListUnmanaged(u8){};
+    var stderr: std.ArrayList(u8) = .empty;
     defer stderr.deinit(reducer.allocator);
 
-    var keep_running_stderr = std.atomic.Value(bool).init(true);
-    const stderr_thread = try std.Thread.spawn(.{}, readStderr, .{
+    var keep_running_stderr: std.atomic.Value(bool) = .init(true);
+    const stderr_thread: std.Thread = try .spawn(.{}, readStderr, .{
         reducer.allocator,
         reducer.zls_process.stderr.?,
         &stderr,
@@ -146,12 +147,10 @@ pub fn reduce(reducer: *Reducer) !void {
         stderr.items;
 
     if (reducer.config.rpc) {
-        var iovecs: [12]std.posix.iovec_const = undefined;
-
-        for ([iovecs.len][]const u8{
+        var data = [_][]const u8{
             std.mem.asBytes(&@as(u32, @intCast(
                 8 +
-                    1 + reducer.config.zig_env.value.version.len +
+                    1 + reducer.config.zig_env.version.len +
                     1 + reducer.config.zls_version.len +
                     4 + reducer.principal_file_source.len +
                     2 + msg.data.len +
@@ -160,8 +159,8 @@ pub fn reduce(reducer: *Reducer) !void {
 
             std.mem.asBytes(&std.time.milliTimestamp()),
 
-            std.mem.asBytes(&@as(u8, @intCast(reducer.config.zig_env.value.version.len))),
-            reducer.config.zig_env.value.version,
+            std.mem.asBytes(&@as(u8, @intCast(reducer.config.zig_env.version.len))),
+            reducer.config.zig_env.version,
 
             std.mem.asBytes(&@as(u8, @intCast(reducer.config.zls_version.len))),
             reducer.config.zls_version,
@@ -174,17 +173,16 @@ pub fn reduce(reducer: *Reducer) !void {
 
             std.mem.asBytes(&@as(u16, @intCast(processed_stderr.len))),
             processed_stderr,
-        }, &iovecs) |val, *iovec| {
-            iovec.* = .{ .base = val.ptr, .len = val.len };
-        }
+        };
 
-        try std.io.getStdOut().writevAll(&iovecs);
+        var file_writer = std.fs.File.stdout().writer(&.{});
+        try file_writer.interface.writeVecAll(&data);
     } else {
         var bytes: [32]u8 = undefined;
         reducer.random.bytes(&bytes);
 
         var file_name_buffer: [bytes.len * 2 + ".md".len]u8 = undefined;
-        const file_name = std.fmt.bufPrint(&file_name_buffer, "{}.md", .{std.fmt.fmtSliceHexLower(&bytes)}) catch unreachable;
+        const file_name = std.fmt.bufPrint(&file_name_buffer, "{x}.md", .{bytes}) catch unreachable;
         std.debug.assert(file_name.len == file_name_buffer.len);
 
         var logs_dir = try std.fs.cwd().makeOpenPath("saved_logs", .{});
@@ -193,15 +191,15 @@ pub fn reduce(reducer: *Reducer) !void {
         const entry_file = try logs_dir.createFile(file_name, .{});
         defer entry_file.close();
 
-        var timestamp_buf: [32]u8 = undefined;
-        var iovecs: [17]std.posix.iovec_const = undefined;
+        var file_writer = entry_file.writer(&.{});
 
-        for ([iovecs.len][]const u8{
+        var timestamp_buf: [32]u8 = undefined;
+        var data = [_][]const u8{
             "timestamp: ",
             try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.milliTimestamp()}),
             "\n",
             "zig version: ",
-            reducer.config.zig_env.value.version,
+            reducer.config.zig_env.version,
             "\nzls version: ",
             reducer.config.zls_version,
             "\n\n",
@@ -214,20 +212,17 @@ pub fn reduce(reducer: *Reducer) !void {
             "stderr:\n```\n",
             processed_stderr,
             "\n```\n",
-        }, &iovecs) |val, *iovec| {
-            iovec.* = .{ .base = val.ptr, .len = val.len };
-        }
-
-        try entry_file.writevAll(&iovecs);
+        };
+        try file_writer.interface.writeVecAll(&data);
     }
 }
 
 fn repeatMessage(reducer: *Reducer, msg: Message) !void {
-    try reducer.transport.writeJsonMessage(msg.data);
+    try reducer.stdio_transport.transport.writeJsonMessage(msg.data);
 
     try utils.waitForResponseToRequest(
         reducer.allocator,
-        &reducer.transport,
+        &reducer.stdio_transport.transport,
         msg.id,
     );
 }
@@ -241,13 +236,14 @@ fn sendRequest(reducer: *Reducer, comptime method: []const u8, params: lsp.Param
         .params = params,
     };
 
-    reducer.write_buffer.clearRetainingCapacity();
-    try std.json.stringify(request, .{ .emit_null_optional_fields = false }, reducer.write_buffer.writer(reducer.allocator));
-    try reducer.transport.writeJsonMessage(reducer.write_buffer.items);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(reducer.allocator, &reducer.write_buffer);
+    aw.clearRetainingCapacity();
+    std.json.Stringify.value(request, .{ .emit_null_optional_fields = false }, &aw.writer) catch return error.OutOfMemory;
+    try reducer.stdio_transport.transport.writeJsonMessage(reducer.write_buffer.items);
 
     try utils.waitForResponseToRequest(
         reducer.allocator,
-        &reducer.transport,
+        &reducer.stdio_transport.transport,
         reducer.id,
     );
 }
@@ -258,15 +254,16 @@ fn sendNotification(reducer: *Reducer, comptime method: []const u8, params: lsp.
         .params = params,
     };
 
-    reducer.write_buffer.clearRetainingCapacity();
-    try std.json.stringify(notification, .{ .emit_null_optional_fields = false }, reducer.write_buffer.writer(reducer.allocator));
-    try reducer.transport.writeJsonMessage(reducer.write_buffer.items);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(reducer.allocator, &reducer.write_buffer);
+    aw.clearRetainingCapacity();
+    std.json.Stringify.value(notification, .{ .emit_null_optional_fields = false }, &aw.writer) catch return error.OutOfMemory;
+    try reducer.stdio_transport.transport.writeJsonMessage(reducer.write_buffer.items);
 }
 
 fn readStderr(
     allocator: std.mem.Allocator,
     stderr: std.fs.File,
-    out: *std.ArrayListUnmanaged(u8),
+    out: *std.ArrayList(u8),
     keep_running: *std.atomic.Value(bool),
 ) void {
     var buffer: [4096]u8 = undefined;

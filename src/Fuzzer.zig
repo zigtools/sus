@@ -17,7 +17,8 @@ pub const Config = struct {
     mode_name: ModeName,
     cycles_per_gen: u32,
 
-    zig_env: std.json.Parsed(ZigEnv),
+    zig_env_arena: std.heap.ArenaAllocator.State,
+    zig_env: ZigEnv,
     zls_version: []const u8,
 
     pub const Defaults = struct {
@@ -35,7 +36,7 @@ pub const Config = struct {
     };
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
-        self.zig_env.deinit();
+        self.zig_env_arena.promote(allocator).deinit();
         allocator.free(self.zls_path);
         allocator.free(self.zls_version);
         self.* = undefined;
@@ -58,11 +59,12 @@ cycle: usize = 0,
 zls_process: std.process.Child,
 id: i64 = 0,
 
-transport: lsp.TransportOverStdio,
+transport_read_buffer: [256]u8 = undefined,
+stdio_transport: lsp.Transport.Stdio,
 
-sent_data: std.ArrayListUnmanaged(u8) = .{},
-sent_messages: std.ArrayListUnmanaged(SentMessage) = .{},
-sent_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .{},
+sent_data: std.ArrayList(u8) = .empty,
+sent_messages: std.ArrayList(SentMessage) = .empty,
+sent_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty,
 
 principal_file_source: []const u8 = "",
 principal_file_uri: []const u8,
@@ -92,7 +94,7 @@ pub fn create(
     else
         &.{ config.zls_path, "--log-file", if (builtin.target.os.tag == .windows) "nul" else "/dev/null", "--disable-lsp-logs" };
 
-    var zls_process = std.process.Child.init(argv, allocator);
+    var zls_process: std.process.Child = .init(argv, allocator);
     zls_process.env_map = &env_map;
     zls_process.stdin_behavior = .Pipe;
     zls_process.stderr_behavior = .Ignore;
@@ -101,7 +103,7 @@ pub fn create(
     try zls_process.spawn();
     errdefer _ = zls_process.kill() catch @panic("failed to kill zls process");
 
-    var sent_ids = std.AutoArrayHashMapUnmanaged(i64, void){};
+    var sent_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty;
     try sent_ids.ensureTotalCapacity(allocator, config.cycles_per_gen);
 
     fuzzer.* = .{
@@ -109,9 +111,9 @@ pub fn create(
         .progress_node = progress.start("fuzzer", 0),
         .mode = mode,
         .config = config,
-        .rand = std.Random.DefaultPrng.init(seed),
+        .rand = .init(seed),
         .zls_process = zls_process,
-        .transport = lsp.TransportOverStdio.init(zls_process.stdout.?, zls_process.stdin.?),
+        .stdio_transport = .init(&fuzzer.transport_read_buffer, zls_process.stdout.?, zls_process.stdin.?),
         .sent_ids = sent_ids,
         .principal_file_uri = principal_file_uri,
     };
@@ -148,10 +150,10 @@ pub fn initCycle(fuzzer: *Fuzzer) !void {
     });
     try fuzzer.sendNotification("initialized", .{});
 
-    var settings = std.json.ObjectMap.init(fuzzer.allocator);
+    var settings: std.json.ObjectMap = .init(fuzzer.allocator);
     defer settings.deinit();
     try settings.putNoClobber("skip_std_references", .{ .bool = true }); // references collection into std is very slow
-    try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.value.zig_exe });
+    try settings.putNoClobber("zig_exe_path", .{ .string = fuzzer.config.zig_env.zig_exe });
 
     try fuzzer.sendNotification("workspace/didChangeConfiguration", lsp.types.DidChangeConfigurationParams{
         .settings = .{ .object = settings },
@@ -177,7 +179,7 @@ pub fn closeCycle(fuzzer: *Fuzzer) !void {
 }
 
 pub fn reduce(fuzzer: *Fuzzer) !void {
-    var reducer = Reducer.fromFuzzer(fuzzer);
+    var reducer: Reducer = .fromFuzzer(fuzzer);
     defer reducer.deinit();
 
     try reducer.reduce();
@@ -190,7 +192,7 @@ pub fn fuzz(fuzzer: *Fuzzer) !void {
         // detch from cycle count to prevent pipe fillage on windows
         try utils.waitForResponseToRequests(
             fuzzer.allocator,
-            &fuzzer.transport,
+            &fuzzer.stdio_transport.transport,
             &fuzzer.sent_ids,
         );
 
@@ -239,7 +241,7 @@ pub fn fuzzFeatureRandom(
     fuzzer: *Fuzzer,
     file_uri: []const u8,
     file_data: []const u8,
-) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
+) (lsp.Transport.WriteError || error{OutOfMemory})!void {
     const rand = fuzzer.random();
     const wtf = rand.enumValue(WhatToFuzz);
 
@@ -289,7 +291,7 @@ pub fn fuzzFeatureRandom(
     }
 }
 
-fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
+fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.Transport.WriteError || error{OutOfMemory})!void {
     defer fuzzer.id += 1;
 
     const request: lsp.TypedJsonRPCRequest(lsp.ParamsType(method)) = .{
@@ -299,8 +301,12 @@ fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsT
     };
 
     const start = fuzzer.sent_data.items.len;
-    try std.json.stringify(request, .{ .emit_null_optional_fields = false }, fuzzer.sent_data.writer(fuzzer.allocator));
-    try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
+    {
+        var aw: std.Io.Writer.Allocating = .fromArrayList(fuzzer.allocator, &fuzzer.sent_data);
+        defer fuzzer.sent_data = aw.toArrayList();
+        std.json.Stringify.value(request, .{ .emit_null_optional_fields = false }, &aw.writer) catch return error.OutOfMemory;
+    }
+    try fuzzer.stdio_transport.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 
     try fuzzer.sent_messages.append(fuzzer.allocator, .{
         .id = fuzzer.id,
@@ -311,13 +317,17 @@ fn sendRequest(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsT
     fuzzer.sent_ids.putAssumeCapacityNoClobber(fuzzer.id, {});
 }
 
-fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.AnyTransport.WriteError || error{OutOfMemory})!void {
+fn sendNotification(fuzzer: *Fuzzer, comptime method: []const u8, params: lsp.ParamsType(method)) (lsp.Transport.WriteError || error{OutOfMemory})!void {
     const notification: lsp.TypedJsonRPCNotification(lsp.ParamsType(method)) = .{
         .method = method,
         .params = params,
     };
 
     const start = fuzzer.sent_data.items.len;
-    try std.json.stringify(notification, .{ .emit_null_optional_fields = false }, fuzzer.sent_data.writer(fuzzer.allocator));
-    try fuzzer.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
+    {
+        var aw: std.Io.Writer.Allocating = .fromArrayList(fuzzer.allocator, &fuzzer.sent_data);
+        defer fuzzer.sent_data = aw.toArrayList();
+        std.json.Stringify.value(notification, .{ .emit_null_optional_fields = false }, &aw.writer) catch return error.OutOfMemory;
+    }
+    try fuzzer.stdio_transport.transport.writeJsonMessage(fuzzer.sent_data.items[start..]);
 }
