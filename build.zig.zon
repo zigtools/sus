@@ -1,11 +1,11 @@
 .{
     .name = .sus,
     .version = "0.1.0",
-    .minimum_zig_version = "0.15.0-dev.1593+399bace2f",
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .lsp_kit = .{
-            .url = "git+https://github.com/zigtools/lsp-kit#6031c563c1e1f30e7e2857fcd81a5d06e4a0c099",
-            .hash = "lsp_kit-0.1.0-bi_PL5YyCgA2QFEza6llr2Uy08QUQsWBu2wKvtr8tbLx",
+            .url = "git+https://github.com/zigtools/lsp-kit.git#6274eebace9a6a82ce182e24468fef88e0b95f37",
+            .hash = "lsp_kit-0.1.0-bi_PLzAyCgClDh8_M0U9Q50ysdsQBuRuBTZfwg6rZPd6",
         },
     },
     .paths = .{
