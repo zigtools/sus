@@ -30,14 +30,17 @@ For a listing of build options, use 'zig build --help'.
 ```
 
 # .env
-if a .env file is present at project root or next to the exe, the following keys will be used as default values.  
+
+If a `.env` file is present in the current working directory, the following keys will be used as default values.
+
 ```console
-zls_path=~/repos/zls/zig-out/bin/zls
+zls_path=/path/to/repos/zls/zig-out/bin/zls
 mode=markov
-markov_training_dir=~/repos/zig/src
+markov_training_dir=/path/to/repos/zig/src
 ```
 
 this allows the project to be run with no args:
+
 ```console
 zig build run
 ```

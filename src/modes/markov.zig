@@ -57,16 +57,18 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
 
 pub const Follows = union(enum) {
     /// special case for low number of items
-    sso: std.BoundedArray(Item, sso_size),
+    sso: struct {
+        buffer: [sso_size]Item = undefined,
+        size: std.math.IntFittingRange(0, sso_size) = 0,
+    },
     large: struct {
-        map: Map = .{},
+        map: std.ArrayList(Item) = .empty,
         count: usize = 0,
     },
 
-    pub const empty = Follows{ .sso = .{} };
+    pub const empty: Follows = .{ .sso = .{} };
     pub const sso_size = 8;
 
-    pub const Map = std.ArrayListUnmanaged(Item);
     pub const Item = packed struct {
         char: u8,
         count: u24,
@@ -87,14 +89,14 @@ pub const Follows = union(enum) {
 
     pub fn items(self: *Follows) []Item {
         switch (self.*) {
-            .sso => |*array| return array.slice(),
+            .sso => |*array| return array.buffer[0..array.size],
             .large => |payload| return payload.map.items,
         }
     }
 
     pub fn constItems(self: *const Follows) []const Item {
         switch (self.*) {
-            .sso => |*array| return array.constSlice(),
+            .sso => |*array| return array.buffer[0..array.size],
             .large => |payload| return payload.map.items,
         }
     }
@@ -103,7 +105,7 @@ pub const Follows = union(enum) {
         switch (self) {
             .sso => |array| {
                 var result: usize = 0;
-                for (array.constSlice()) |item| {
+                for (array.buffer[0..array.size]) |item| {
                     result += item.count;
                 }
                 return result;
@@ -127,17 +129,21 @@ pub const Follows = union(enum) {
         const new_item = Item{ .char = char, .count = 1 };
         switch (self.*) {
             .sso => |*array| {
-                array.append(new_item) catch {
+                if (array.size == array.buffer.len) {
                     // convert small size optimization state into large
-                    var map = try std.ArrayListUnmanaged(Item).initCapacity(allocator, sso_size + 1);
-                    map.appendSliceAssumeCapacity(array.slice());
+                    var map: std.ArrayList(Item) = .empty;
+                    try map.ensureTotalCapacity(allocator, array.buffer.len + 1);
+                    map.appendSliceAssumeCapacity(&array.buffer);
                     map.appendAssumeCapacity(new_item);
-                    const new_state = Follows{ .large = .{
+                    const new_state: Follows = .{ .large = .{
                         .map = map,
                         .count = self.count() + 1,
                     } };
                     self.* = new_state;
-                };
+                } else {
+                    array.buffer[array.size] = new_item;
+                    array.size += 1;
+                }
             },
             .large => |*payload| {
                 try payload.map.append(allocator, new_item);
@@ -151,15 +157,11 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
     return struct {
         table: Table = .{},
         allocator: mem.Allocator,
-        rand: std.rand.Random,
 
         pub const Iter = Iterator(byte_len);
         pub const Table = std.AutoArrayHashMapUnmanaged(Iter.Block, Follows);
         const Self = @This();
 
-        pub fn init(allocator: mem.Allocator, rand: std.rand.Random) Self {
-            return .{ .allocator = allocator, .rand = rand };
-        }
         pub fn deinit(self: *Self, allocator: mem.Allocator) void {
             var iter = self.table.iterator();
             while (iter.next()) |*m| m.value_ptr.deinit(allocator);
@@ -195,16 +197,17 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         /// previous input to feed().
         pub fn gen(
             self: *Self,
-            writer: anytype,
+            random: std.Random,
+            writer: *std.Io.Writer,
             options: GenOptions,
-        ) !void {
+        ) error{WriteFailed}!void {
             const start_block = if (options.start_block) |start_block|
                 Iter.strToBlock(if (start_block.len > byte_len)
                     start_block[start_block.len - byte_len ..]
                 else
                     start_block)
             else blk: {
-                const id = self.rand.intRangeLessThan(usize, 0, self.table.count());
+                const id = random.intRangeLessThan(usize, 0, self.table.count());
                 break :blk self.table.keys()[id];
             };
             _ = try writer.write(&start_block);
@@ -227,7 +230,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
                 };
 
                 // pick a random item
-                var r = self.rand.intRangeAtMost(usize, 0, follows.count());
+                var r = random.intRangeAtMost(usize, 0, follows.count());
                 const first_follow = follows.constItems()[0];
                 var c = first_follow.char;
                 if (debug) std.debug.print("follows {any} r {}\n", .{ follows.constItems(), r });
@@ -250,7 +253,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
 //     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 //     const allr = arena.allocator();
 //     var argit = try std.process.ArgIterator.initWithAllocator(allr);
-//     var prng = std.rand.DefaultPrng.init(@bitCast(u64, std.time.milliTimestamp()));
+//     var prng = std.Random.DefaultPrng.init(@bitCast(u64, std.time.milliTimestamp()));
 //     const M = Model(build_options.block_len, false);
 //     var model = M.init(allr, prng.random());
 //     _ = argit.next();

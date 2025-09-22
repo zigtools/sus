@@ -2,13 +2,11 @@ name: CI
 
 on:
   push:
-    paths:
-      - "**.zig"
+    branches:
+      - main
   pull_request:
-    paths:
-      - "**.zig"
-  schedule:
-    - cron: "0 0 * * *"
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -18,16 +16,11 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          submodules: recursive
-      - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: master
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - run: zig version
-      - run: zig env
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
 
       - name: Build
         run: zig build

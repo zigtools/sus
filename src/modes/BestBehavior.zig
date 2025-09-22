@@ -1,18 +1,18 @@
 const std = @import("std");
-const utils = @import("../utils.zig");
 
 const BestBehavior = @This();
 
-random: std.rand.DefaultPrng,
-tests: std.ArrayListUnmanaged([]const u8),
+random: std.Random.DefaultPrng,
+tests: std.ArrayList([]const u8),
 
 const usage =
     \\Usage best behavior Mode:
     \\     --source-dir   - directory to be used for fuzzing. searched for .zig files recursively.
+    \\
 ;
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writeAll(usage) catch {};
+    std.fs.File.stderr().writeAll(usage) catch {};
     std.log.err(format, args);
     std.process.exit(1);
 }
@@ -24,19 +24,18 @@ fn fatal(comptime format: []const u8, args: anytype) noreturn {
 
 pub fn init(
     allocator: std.mem.Allocator,
-    progress: *std.Progress,
+    progress: std.Progress.Node,
     arg_it: *std.process.ArgIterator,
     envmap: std.process.EnvMap,
 ) !*BestBehavior {
     var bb = try allocator.create(BestBehavior);
     errdefer allocator.destroy(bb);
 
-    var seed: u64 = 0;
-    try std.os.getrandom(std.mem.asBytes(&seed));
+    const seed = std.crypto.random.int(u64);
 
     bb.* = .{
-        .random = std.rand.DefaultPrng.init(seed),
-        .tests = .{},
+        .random = .init(seed),
+        .tests = .empty,
     };
     errdefer bb.deinit(allocator);
 
@@ -44,7 +43,7 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdOut().writeAll(usage);
+            try std.fs.File.stdout().writeAll(usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--source-dir")) {
             source_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --source-dir", .{});
@@ -58,7 +57,7 @@ pub fn init(
         fatalWithUsage("missing mode argument '--source-dir'", .{});
     }
 
-    progress.log(
+    std.debug.print(
         \\
         \\source-dir:     {s}
         \\
@@ -89,15 +88,15 @@ pub fn init(
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
 
-    var file_buf = std.ArrayListUnmanaged(u8){};
+    var file_buf: std.ArrayList(u8) = .empty;
     defer file_buf.deinit(allocator);
 
-    progress_node.activate();
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
 
-        // std.log.info("found file {s}", .{entry.path});
+        const node = progress_node.start(entry.basename, 0);
+        defer node.end();
 
         var file = try entry.dir.openFile(entry.basename, .{});
         defer file.close();
@@ -109,8 +108,6 @@ pub fn init(
 
         try bb.tests.ensureUnusedCapacity(allocator, 1);
         bb.tests.appendAssumeCapacity(try file_buf.toOwnedSlice(allocator));
-
-        progress_node.completeOne();
     }
 
     return bb;

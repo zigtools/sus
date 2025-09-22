@@ -8,7 +8,7 @@ pub const Mode = union(enum) {
     pub fn init(
         mode_name: ModeName,
         allocator: std.mem.Allocator,
-        progress: *std.Progress,
+        progress: std.Progress.Node,
         arg_it: *std.process.ArgIterator,
         envmap: std.process.EnvMap,
     ) !Mode {
