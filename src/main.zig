@@ -149,14 +149,14 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             .allocator = allocator,
             .argv = &.{ zig_path, "env" },
         }) catch |err| {
-            std.process.fatal("failed to run '{s} env' command: {}", .{ zls_path, err });
+            std.process.fatal("failed to run '{s} env' command: {}", .{ zig_path, err });
         };
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
         switch (result.term) {
-            .Exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zls_path, code }),
-            else => fatal("command '{s} env' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
+            .Exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zig_path, code }),
+            else => fatal("command '{s} env' exited abnormally: {s}", .{ zig_path, @tagName(result.term) }),
         }
 
         if (std.mem.startsWith(u8, result.stdout, "{")) {
