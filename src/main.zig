@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const Fuzzer = @import("Fuzzer.zig");
 const Mode = @import("mode.zig").Mode;
 const ModeName = @import("mode.zig").ModeName;
-const client = @import("Client.zig");
 
 fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     var envmap: std.process.EnvMap = std.process.getEnvMap(allocator) catch .init(allocator);
