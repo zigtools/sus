@@ -7,7 +7,6 @@ const Markov = @This();
 const MarkovModel = markov.Model(build_options.block_len, false);
 
 model: MarkovModel,
-random: std.Random.DefaultPrng,
 maxlen: u32 = Defaults.maxlen,
 
 const Defaults = struct {
@@ -40,12 +39,9 @@ pub fn init(
     arg_it: *std.process.ArgIterator,
     envmap: std.process.EnvMap,
 ) !*Markov {
-    const seed = std.crypto.random.int(u64);
-
     var mm = try allocator.create(Markov);
     mm.* = .{
         .model = .{ .allocator = allocator },
-        .random = .init(seed),
     };
     errdefer mm.deinit(allocator);
 
@@ -138,9 +134,9 @@ pub fn deinit(mm: *Markov, allocator: std.mem.Allocator) void {
     allocator.destroy(mm);
 }
 
-pub fn gen(mm: *Markov, allocator: std.mem.Allocator) error{ OutOfMemory, WriteFailed }![]const u8 {
+pub fn gen(mm: *Markov, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
-    try mm.model.gen(mm.random.random(), &aw.writer, .{ .maxlen = mm.maxlen });
+    mm.model.gen(random, &aw.writer, .{ .maxlen = mm.maxlen }) catch return error.OutOfMemory;
     return try aw.toOwnedSlice();
 }

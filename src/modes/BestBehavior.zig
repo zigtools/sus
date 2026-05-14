@@ -2,7 +2,6 @@ const std = @import("std");
 
 const BestBehavior = @This();
 
-random: std.Random.DefaultPrng,
 tests: std.ArrayList([]const u8),
 
 const usage =
@@ -31,10 +30,7 @@ pub fn init(
     var bb = try allocator.create(BestBehavior);
     errdefer allocator.destroy(bb);
 
-    const seed = std.crypto.random.int(u64);
-
     bb.* = .{
-        .random = .init(seed),
         .tests = .empty,
     };
     errdefer bb.deinit(allocator);
@@ -120,9 +116,7 @@ pub fn deinit(bb: *BestBehavior, allocator: std.mem.Allocator) void {
     bb.tests.deinit(allocator);
 }
 
-pub fn gen(bb: *BestBehavior, allocator: std.mem.Allocator) ![]const u8 {
-    const random = bb.random.random();
-
+pub fn gen(bb: *BestBehavior, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
     const index = random.intRangeLessThan(usize, 0, bb.tests.items.len);
     const file_content = bb.tests.items[index];
 

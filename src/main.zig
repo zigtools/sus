@@ -56,6 +56,8 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             break :blk Fuzzer.Config.Defaults.rpc;
         } else Fuzzer.Config.Defaults.rpc;
 
+    var seed: ?u64 = null; // Cannot be set through env_map
+
     var mode_name: ?ModeName = blk: {
         if (env_map.get("mode")) |mode_name| {
             if (std.meta.stringToEnum(ModeName, mode_name)) |mode| {
@@ -90,6 +92,9 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--rpc")) {
             rpc = true;
+        } else if (std.mem.eql(u8, arg, "--seed")) {
+            const next_arg = arg_it.next() orelse fatal("expected number after --seed", .{});
+            seed = std.fmt.parseUnsigned(u64, next_arg, 10) catch fatal("invalid unsigned integer '{s}'", .{next_arg});
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
             if (maybe_zls_path) |path| {
                 allocator.free(path);
@@ -127,7 +132,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             .allocator = allocator,
             .argv = &.{ zls_path, "--version" },
         }) catch |err| {
-            std.process.fatal("Failed to run '{s} --version' command: {}", .{ zls_path, err });
+            fatal("Failed to run '{s} --version' command: {}", .{ zls_path, err });
         };
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
@@ -149,7 +154,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             .allocator = allocator,
             .argv = &.{ zig_path, "env" },
         }) catch |err| {
-            std.process.fatal("failed to run '{s} env' command: {}", .{ zig_path, err });
+            fatal("failed to run '{s} env' command: {}", .{ zig_path, err });
         };
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
@@ -172,7 +177,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                 &scanner,
                 .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
             ) catch |err| {
-                std.log.err(
+                fatal(
                     \\command '{s} env' did not respond with valid json or zon
                     \\stdout:
                     \\{s}
@@ -180,7 +185,6 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                     \\{s}
                     \\On Line {d}, Column {d}: {}
                 , .{ zig_path, result.stdout, result.stderr, diagnostics.getLine(), diagnostics.getColumn(), err });
-                std.process.exit(1);
             };
         } else {
             const stdout = try allocator.dupeZ(u8, result.stdout);
@@ -194,7 +198,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                 &diagnostics,
                 .{ .ignore_unknown_fields = true },
             ) catch {
-                std.log.err(
+                fatal(
                     \\command '{s} env' did not respond with valid json or zon
                     \\stdout:
                     \\{s}
@@ -202,13 +206,13 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
                     \\{s}
                     \\{f}
                 , .{ zig_path, result.stdout, result.stderr, diagnostics });
-                std.process.exit(1);
             };
         }
     };
 
     return .{
         .rpc = rpc,
+        .seed = seed,
         .zls_path = zls_path,
         .mode_name = mode,
         .cycles_per_gen = cycles_per_gen,
@@ -231,6 +235,7 @@ const usage = std.fmt.comptimePrint(
     \\General Options:
     \\  --help                Print this help and exit
     \\  --mode [mode]         Specify fuzzing mode - one of {f}
+    \\  --seed [number]       Fuzz a specific seed to reproduce a crash
     \\  --rpc                 Use RPC mode (default: {})
     \\  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
     \\  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
@@ -247,13 +252,10 @@ const usage = std.fmt.comptimePrint(
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
     std.fs.File.stderr().writeAll(usage) catch {};
-    std.process.fatal(format, args);
+    fatal(format, args);
 }
 
-fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.log.err(format, args);
-    std.process.exit(1);
-}
+const fatal = std.process.fatal;
 
 pub fn findInPath(allocator: std.mem.Allocator, env_map: std.process.EnvMap, sub_path: []const u8) ?[]const u8 {
     const env_path = env_map.get("PATH") orelse return null;
@@ -304,6 +306,7 @@ pub fn main() !void {
         \\zig-path:       {s}
         \\zls-path:       {s}
         \\mode:           {s}
+        \\seed:           {?d}
         \\cycles-per-gen: {d}
         \\
     , .{
@@ -312,60 +315,56 @@ pub fn main() !void {
         config.zig_env.zig_exe,
         config.zls_path,
         @tagName(config.mode_name),
+        config.seed,
         config.cycles_per_gen,
     });
 
     var mode: Mode = try .init(config.mode_name, gpa, progress, &arg_it, env_map);
     defer mode.deinit(gpa);
 
-    const cwd_path = try std.process.getCwdAlloc(gpa);
-    defer gpa.free(cwd_path);
-
-    const principal_file_path = try std.fs.path.join(gpa, &.{ cwd_path, "tmp", "principal.zig" });
-    defer gpa.free(principal_file_path);
-
-    const principal_file_uri = try std.fmt.allocPrint(gpa, "{f}", .{std.Uri{
-        .scheme = "file",
-        .path = .{ .raw = principal_file_path },
-    }});
-    defer gpa.free(principal_file_uri);
-
     while (true) {
-        var fuzzer: *Fuzzer = try .create(
-            gpa,
-            progress,
-            &mode,
-            config,
-            principal_file_uri,
-        );
-        errdefer {
-            fuzzer.wait();
-            fuzzer.destroy();
-        }
-        fuzzer.progress_node.setEstimatedTotalItems(100_000);
-        try fuzzer.initCycle();
+        const progress_node = progress.start("fuzzing", 100_000);
+        defer progress_node.end();
 
-        while (true) {
-            if (fuzzer.cycle >= 100_000) {
-                std.debug.print("Fuzzer running too long with no result... restarting\n", .{});
+        var fuzzer: Fuzzer = try .init(gpa, &mode, &config);
+        defer fuzzer.deinit();
+        errdefer fuzzer.client.kill();
 
-                try fuzzer.closeCycle();
-                fuzzer.wait();
-                fuzzer.destroy();
+        fuzzer.client.initialize() catch |err| {
+            std.log.err("Failed to initalize LSP Client: {}", .{err});
+            return err;
+        };
+
+        while (fuzzer.cycle < 100_000) {
+            if (fuzzer.fuzz()) {
+                progress_node.completeOne();
+            } else |err| {
+                try fuzzer.client.wait();
+                std.log.info("Reducing {} [seed={d}]...", .{ err, fuzzer.seed });
+                // if (config.seed != null) return;
+
+                const progress_node_reduce = progress_node.start("reducing", fuzzer.cycle);
+                defer progress_node_reduce.end();
+                try @import("Reducer.zig").reduce(
+                    gpa,
+                    &mode,
+                    &config,
+                    fuzzer.seed,
+                    progress_node_reduce,
+                );
                 break;
             }
+        } else {
+            if (config.seed != null) {
+                std.log.info("Fuzzer running too long with no result. restarting...", .{});
+            }
 
-            fuzzer.fuzz() catch {
-                std.debug.print("Reducing...\n", .{});
-
-                fuzzer.wait();
-                try fuzzer.reduce();
-                fuzzer.destroy();
-
-                std.debug.print("Restarting fuzzer...\n", .{});
-
-                break;
+            fuzzer.client.shutdown() catch |err| {
+                std.log.err("Failed to shutdown LSP Client: {}", .{err});
+                return err;
             };
+            try fuzzer.client.wait();
+            if (config.seed != null) return;
         }
     }
 }

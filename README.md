@@ -20,9 +20,11 @@ Example: sus --mode markov        -- --training-dir  /path/to/folder/containing/
 
 General Options:
   --help                Print this help and exit
-  --output-as-dir       Output fuzzing results as directories (default: false)
-  --zls-path [path]     Specify path to ZLS executable
-  --mode [mode]         Specify fuzzing mode - one of { best_behavior, markov }
+  --mode [mode]         Specify fuzzing mode - one of ["best_behavior","markov"]
+  --seed [number]       Fuzz a specific seed to reproduce a crash
+  --rpc                 Use RPC mode (default: false)
+  --zls-path [path]     Specify path to ZLS executable (default: Search in PATH)
+  --zig-path [path]     Specify path to Zig executable (default: Search in PATH)
   --cycles-per-gen      How many times to fuzz a random feature before regenerating a new file. (default: 25)
 
 For a listing of mode specific options, use 'sus --mode [mode] -- --help'.
