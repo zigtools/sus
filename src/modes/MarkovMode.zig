@@ -23,21 +23,21 @@ const usage = std.fmt.comptimePrint(
 });
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.fs.File.stderr().writeAll(usage) catch {};
+    const stderr = std.debug.lockStderr(&.{}).terminal();
+    defer std.debug.unlockStderr();
+    stderr.writer.writeAll(usage) catch {};
     std.log.err(format, args);
     std.process.exit(1);
 }
 
-fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.log.err(format, args);
-    std.process.exit(1);
-}
+const fatal = std.process.fatal;
 
 pub fn init(
+    io: std.Io,
     allocator: std.mem.Allocator,
     progress: std.Progress.Node,
-    arg_it: *std.process.ArgIterator,
-    envmap: std.process.EnvMap,
+    arg_it: *std.process.Args.Iterator,
+    envmap: *const std.process.Environ.Map,
 ) !*Markov {
     var mm = try allocator.create(Markov);
     mm.* = .{
@@ -56,7 +56,7 @@ pub fn init(
 
     while (arg_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.fs.File.stdout().writeAll(usage);
+            try std.Io.File.stdout().writeStreamingAll(io, usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--training-dir")) {
             training_dir = arg_it.next() orelse fatalWithUsage("expected directory path after --training-dir", .{});
@@ -84,16 +84,16 @@ pub fn init(
     var progress_node = progress.start("markov: feeding model", 0);
     defer progress_node.end();
 
-    var iterable_dir = try std.fs.cwd().openDir(training_dir.?, .{ .iterate = true });
-    defer iterable_dir.close();
+    var iterable_dir = try std.Io.Dir.cwd().openDir(io, training_dir.?, .{ .iterate = true });
+    defer iterable_dir.close(io);
 
     {
         var walker = try iterable_dir.walk(allocator);
         defer walker.deinit();
         var file_count: usize = 0;
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
-            if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
+            if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
             file_count += 1;
             progress_node.setEstimatedTotalItems(file_count);
         }
@@ -105,20 +105,21 @@ pub fn init(
     var file_buf: std.ArrayList(u8) = .empty;
     defer file_buf.deinit(allocator);
 
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
+        if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
 
         const node = progress_node.start(entry.basename, 0);
         defer node.end();
 
-        var file = try entry.dir.openFile(entry.basename, .{});
-        defer file.close();
+        var file = try entry.dir.openFile(io, entry.basename, .{});
+        defer file.close(io);
 
-        const size = std.math.cast(usize, try file.getEndPos()) orelse return error.FileTooBig;
+        const size = std.math.cast(usize, try file.length(io)) orelse return error.FileTooBig;
         try file_buf.ensureTotalCapacity(allocator, size);
         file_buf.items.len = size;
-        _ = try file.readAll(file_buf.items);
+        var reader = file.reader(io, &.{});
+        try reader.interface.readSliceAll(file_buf.items);
 
         try mm.model.feed(file_buf.items);
     }
@@ -137,6 +138,8 @@ pub fn deinit(mm: *Markov, allocator: std.mem.Allocator) void {
 pub fn gen(mm: *Markov, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
-    mm.model.gen(random, &aw.writer, .{ .maxlen = mm.maxlen }) catch return error.OutOfMemory;
+    mm.model.gen(random, &aw.writer, .{ .maxlen = mm.maxlen }) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+    };
     return try aw.toOwnedSlice();
 }

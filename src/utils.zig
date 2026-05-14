@@ -26,12 +26,13 @@ fn isFirstUtf8Byte(byte: u8) bool {
 }
 
 pub fn waitForResponseToRequest(
+    io: std.Io,
     allocator: std.mem.Allocator,
     transport: *lsp.Transport,
     id: lsp.JsonRPCMessage.ID,
 ) !void {
     while (true) {
-        const json_message = try transport.readJsonMessage(allocator);
+        const json_message = try transport.readJsonMessage(io, allocator);
         defer allocator.free(json_message);
 
         const result = try std.json.parseFromSlice(
@@ -54,12 +55,13 @@ pub fn waitForResponseToRequest(
 }
 
 pub fn waitForResponseToRequests(
+    io: std.Io,
     allocator: std.mem.Allocator,
     transport: *lsp.Transport,
     ids: *std.AutoArrayHashMapUnmanaged(i64, void),
 ) !void {
     while (ids.count() != 0) {
-        const json_message = try transport.readJsonMessage(allocator);
+        const json_message = try transport.readJsonMessage(io, allocator);
         defer allocator.free(json_message);
 
         const result = try std.json.parseFromSlice(
@@ -99,9 +101,10 @@ const WhatToFuzz = enum {
 };
 
 pub fn fuzzFeatureRandom(
-    transport: ?*lsp.Transport,
+    io: std.Io,
     allocator: std.mem.Allocator,
-    text_document: lsp.types.TextDocumentItem,
+    transport: ?*lsp.Transport,
+    text_document: lsp.types.TextDocument,
     random: std.Random,
 ) (lsp.Transport.WriteError || error{OutOfMemory})!struct { lsp.JsonRPCMessage.ID, []u8 } {
     const id: lsp.JsonRPCMessage.ID = .{ .number = random.int(i64) };
@@ -117,12 +120,12 @@ pub fn fuzzFeatureRandom(
                 .@"textDocument/signatureHelp",
                 .@"textDocument/hover",
                 .@"textDocument/documentHighlight",
-                => lsp.types.DeclarationParams,
+                => lsp.types.declaration.Params,
 
                 .@"textDocument/semanticTokens/full",
                 .@"textDocument/documentSymbol",
                 .@"textDocument/foldingRange",
-                => lsp.types.SemanticTokensParams,
+                => lsp.types.semantic_tokens.Params,
 
                 .@"textDocument/inlayHint",
                 .@"textDocument/references",
@@ -141,7 +144,7 @@ pub fn fuzzFeatureRandom(
                 const json_message = try std.json.Stringify.valueAlloc(allocator, request, .{ .emit_null_optional_fields = false });
                 errdefer allocator.free(json_message);
 
-                try t.writeJsonMessage(json_message);
+                try t.writeJsonMessage(io, json_message);
                 return .{ id, json_message };
             }
             return .{ id, "" };
@@ -152,30 +155,30 @@ pub fn fuzzFeatureRandom(
 fn createRandomRequestParams(
     comptime Params: type,
     random: std.Random,
-    text_document: lsp.types.TextDocumentItem,
+    text_document: lsp.types.TextDocument,
 ) Params {
     return switch (Params) {
-        lsp.types.DeclarationParams => .{
+        lsp.types.declaration.Params => .{
             .textDocument = .{ .uri = text_document.uri },
             .position = randomPosition(random, text_document.text),
         },
-        lsp.types.SemanticTokensParams => .{
+        lsp.types.semantic_tokens.Params => .{
             .textDocument = .{ .uri = text_document.uri },
         },
-        lsp.types.InlayHintParams => .{
+        lsp.types.InlayHint.Params => .{
             .textDocument = .{ .uri = text_document.uri },
             .range = randomRange(random, text_document.text),
         },
-        lsp.types.ReferenceParams => .{
+        lsp.types.reference.Params => .{
             .context = .{ .includeDeclaration = random.boolean() },
             .textDocument = .{ .uri = text_document.uri },
             .position = randomPosition(random, text_document.text),
         },
-        lsp.types.DocumentFormattingParams => .{
+        lsp.types.document_formatting.Params => .{
             .textDocument = .{ .uri = text_document.uri },
             .options = .{ .tabSize = 4, .insertSpaces = true },
         },
-        lsp.types.RenameParams => .{
+        lsp.types.rename.Params => .{
             .textDocument = .{ .uri = text_document.uri },
             .position = randomPosition(random, text_document.text),
             .newName = "helloWorld",

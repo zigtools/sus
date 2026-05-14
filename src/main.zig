@@ -4,11 +4,15 @@ const Fuzzer = @import("Fuzzer.zig");
 const Mode = @import("mode.zig").Mode;
 const ModeName = @import("mode.zig").ModeName;
 
-fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
-    var envmap: std.process.EnvMap = std.process.getEnvMap(allocator) catch .init(allocator);
+fn loadEnv(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ_map: *const std.process.Environ.Map,
+) std.Io.Dir.ReadFileAllocError!std.process.Environ.Map {
+    var envmap: std.process.Environ.Map = try environ_map.clone(allocator);
     errdefer envmap.deinit();
 
-    const env_content = std.fs.cwd().readFileAlloc(allocator, ".env", std.math.maxInt(usize)) catch |e| switch (e) {
+    const env_content = std.Io.Dir.cwd().readFileAlloc(io, ".env", allocator, .limited(1024 * 1024)) catch |e| switch (e) {
         error.FileNotFound => return envmap,
         else => return e,
     };
@@ -27,14 +31,19 @@ fn loadEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return envmap;
 }
 
-fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it: *std.process.ArgIterator) !Fuzzer.Config {
+fn initConfig(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: *const std.process.Environ.Map,
+    arg_it: *std.process.Args.Iterator,
+) !Fuzzer.Config {
     _ = arg_it.skip();
 
     var maybe_zls_path: ?[]const u8 = blk: {
         if (env_map.get("zls_path")) |path| {
             break :blk try allocator.dupe(u8, path);
         }
-        break :blk findInPath(allocator, env_map, "zls");
+        break :blk try findInPath(io, allocator, env_map, "zls");
     };
     errdefer if (maybe_zls_path) |path| allocator.free(path);
 
@@ -42,7 +51,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (env_map.get("zig_path")) |path| {
             break :blk try allocator.dupe(u8, path);
         }
-        break :blk findInPath(allocator, env_map, "zig");
+        break :blk try findInPath(io, allocator, env_map, "zig");
     };
     defer if (maybe_zig_path) |path| allocator.free(path);
 
@@ -88,7 +97,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         if (std.mem.eql(u8, arg, "--")) break; // all argument after '--' are mode specific arguments
 
         if (std.mem.eql(u8, arg, "--help")) {
-            try std.fs.File.stdout().writeAll(usage);
+            try std.Io.File.stdout().writeStreamingAll(io, usage);
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--rpc")) {
             rpc = true;
@@ -119,7 +128,10 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     }
 
     if (num_args == 0 and (maybe_zls_path == null or mode_name == null)) {
-        std.fs.File.stderr().writeAll(usage) catch {};
+        std.Io.File.stderr().writeStreamingAll(io, usage) catch |err| switch (err) {
+            error.Canceled => |e| return e,
+            else => {},
+        };
         std.process.exit(1);
     }
 
@@ -128,8 +140,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     const mode = mode_name orelse fatalWithUsage("must specify --mode", .{});
 
     const zls_version = blk: {
-        const result = std.process.Child.run(.{
-            .allocator = allocator,
+        const result = std.process.run(allocator, io, .{
             .argv = &.{ zls_path, "--version" },
         }) catch |err| {
             fatal("Failed to run '{s} --version' command: {}", .{ zls_path, err });
@@ -138,7 +149,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         defer allocator.free(result.stderr);
 
         switch (result.term) {
-            .Exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
+            .exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
             else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
         }
 
@@ -150,8 +161,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
     errdefer zig_env_arena.deinit();
 
     const zig_env: Fuzzer.Config.ZigEnv = blk: {
-        const result = std.process.Child.run(.{
-            .allocator = allocator,
+        const result = std.process.run(allocator, io, .{
             .argv = &.{ zig_path, "env" },
         }) catch |err| {
             fatal("failed to run '{s} env' command: {}", .{ zig_path, err });
@@ -160,7 +170,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
         defer allocator.free(result.stderr);
 
         switch (result.term) {
-            .Exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zig_path, code }),
+            .exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zig_path, code }),
             else => fatal("command '{s} env' exited abnormally: {s}", .{ zig_path, @tagName(result.term) }),
         }
 
@@ -191,7 +201,7 @@ fn initConfig(allocator: std.mem.Allocator, env_map: std.process.EnvMap, arg_it:
             defer allocator.free(stdout);
 
             var diagnostics: std.zon.parse.Diagnostics = .{};
-            break :blk std.zon.parse.fromSlice(
+            break :blk std.zon.parse.fromSliceAlloc(
                 Fuzzer.Config.ZigEnv,
                 zig_env_arena.allocator(),
                 stdout,
@@ -251,53 +261,90 @@ const usage = std.fmt.comptimePrint(
 });
 
 fn fatalWithUsage(comptime format: []const u8, args: anytype) noreturn {
-    std.fs.File.stderr().writeAll(usage) catch {};
-    fatal(format, args);
+    const stderr = std.debug.lockStderr(&.{}).terminal();
+    defer std.debug.unlockStderr();
+    stderr.writer.writeAll(usage) catch {};
+    std.log.err(format, args);
+    std.process.exit(1);
 }
 
 const fatal = std.process.fatal;
 
-pub fn findInPath(allocator: std.mem.Allocator, env_map: std.process.EnvMap, sub_path: []const u8) ?[]const u8 {
-    const env_path = env_map.get("PATH") orelse return null;
-    var it = std.mem.tokenizeScalar(u8, env_path, std.fs.path.delimiter);
-    while (it.next()) |path| {
-        const full_path = std.fs.path.join(allocator, &[_][]const u8{ path, sub_path }) catch continue;
+fn findInPath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ_map: *const std.process.Environ.Map,
+    cmd: []const u8,
+) error{ Canceled, OutOfMemory }!?[]const u8 {
+    const is_windows = builtin.target.os.tag == .windows;
 
-        if (!std.fs.path.isAbsolute(full_path)) {
-            allocator.free(full_path);
-            continue;
-        }
-        std.fs.accessAbsolute(full_path, .{}) catch {
-            allocator.free(full_path);
-            continue;
+    const env_path = environ_map.get("PATH") orelse return null;
+    const env_path_ext = if (is_windows) environ_map.get("PATHEXT") orelse return null;
+
+    var filename_buffer: std.ArrayList(u8) = .empty;
+    defer filename_buffer.deinit(allocator);
+
+    var path_it = std.mem.tokenizeScalar(u8, env_path, std.Io.Dir.path.delimiter);
+    var ext_it = if (is_windows) std.mem.tokenizeScalar(u8, env_path_ext, std.Io.Dir.path.delimiter);
+
+    while (path_it.next()) |path| : (if (is_windows) ext_it.reset()) {
+        var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            error.FileNotFound => continue,
+            else => |e| {
+                std.log.warn("failed to open entry in PATH '{s}': {}", .{ path, e });
+                continue;
+            },
         };
+        defer dir.close(io);
 
-        return full_path;
+        var cont = true;
+        while (cont) : (cont = is_windows) {
+            const filename = if (!is_windows) cmd else filename: {
+                const ext = ext_it.next() orelse break;
+
+                filename_buffer.clearRetainingCapacity();
+                try filename_buffer.ensureTotalCapacity(allocator, cmd.len + ext.len);
+                filename_buffer.appendSliceAssumeCapacity(cmd);
+                filename_buffer.appendSliceAssumeCapacity(ext);
+
+                break :filename filename_buffer.items;
+            };
+
+            const stat = dir.statFile(io, filename, .{}) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.FileNotFound => continue,
+                else => |e| {
+                    std.log.warn("failed to access entry in PATH '{f}': {}", .{ std.Io.Dir.path.fmtJoin(&.{ path, filename }), e });
+                    continue;
+                },
+            };
+
+            if (stat.kind == .directory) {
+                std.log.warn("ignoring entry in PATH '{f}' because it is a directory", .{std.Io.Dir.path.fmtJoin(&.{ path, filename })});
+                continue;
+            }
+
+            return try std.Io.Dir.path.join(allocator, &.{ path, filename });
+        }
     }
     return null;
 }
 
-var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const gpa = init.gpa;
 
-pub fn main() !void {
-    const gpa, const is_debug = switch (builtin.mode) {
-        .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
-        .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
-    };
-    defer if (is_debug) {
-        _ = debug_allocator.deinit();
-    };
-
-    var env_map: std.process.EnvMap = loadEnv(gpa) catch .init(gpa);
+    var env_map: std.process.Environ.Map = loadEnv(io, gpa, init.environ_map) catch .init(gpa);
     defer env_map.deinit();
 
-    var arg_it: std.process.ArgIterator = try .initWithAllocator(gpa);
+    var arg_it = init.minimal.args.iterate();
     defer arg_it.deinit();
 
-    var config = try initConfig(gpa, env_map, &arg_it);
+    var config = try initConfig(io, gpa, &env_map, &arg_it);
     defer config.deinit(gpa);
 
-    var progress = std.Progress.start(.{});
+    var progress = std.Progress.start(io, .{});
     defer progress.end();
 
     std.debug.print(
@@ -319,14 +366,14 @@ pub fn main() !void {
         config.cycles_per_gen,
     });
 
-    var mode: Mode = try .init(config.mode_name, gpa, progress, &arg_it, env_map);
+    var mode: Mode = try .init(io, gpa, config.mode_name, progress, &arg_it, &env_map);
     defer mode.deinit(gpa);
 
     while (true) {
         const progress_node = progress.start("fuzzing", 100_000);
         defer progress_node.end();
 
-        var fuzzer: Fuzzer = try .init(gpa, &mode, &config);
+        var fuzzer: Fuzzer = try .init(io, gpa, init.environ_map, &mode, &config);
         defer fuzzer.deinit();
         errdefer fuzzer.client.kill();
 
@@ -346,7 +393,9 @@ pub fn main() !void {
                 const progress_node_reduce = progress_node.start("reducing", fuzzer.cycle);
                 defer progress_node_reduce.end();
                 try @import("Reducer.zig").reduce(
+                    io,
                     gpa,
+                    init.environ_map,
                     &mode,
                     &config,
                     fuzzer.seed,

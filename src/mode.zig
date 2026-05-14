@@ -6,16 +6,16 @@ pub const Mode = union(enum) {
     markov: *@import("modes/MarkovMode.zig"),
 
     pub fn init(
-        mode_name: ModeName,
+        io: std.Io,
         allocator: std.mem.Allocator,
+        mode_name: ModeName,
         progress: std.Progress.Node,
-        arg_it: *std.process.ArgIterator,
-        envmap: std.process.EnvMap,
+        arg_it: *std.process.Args.Iterator,
+        envmap: *const std.process.Environ.Map,
     ) !Mode {
         switch (mode_name) {
             inline else => |m| {
-                const Inner = std.meta.Child(std.meta.TagPayload(Mode, m));
-                return @unionInit(Mode, @tagName(m), try Inner.init(allocator, progress, arg_it, envmap));
+                return @unionInit(Mode, @tagName(m), try .init(io, allocator, progress, arg_it, envmap));
             },
         }
     }

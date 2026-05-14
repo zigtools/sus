@@ -1,8 +1,6 @@
 zig-out
-zig-cache
+zig-pkg
 .zig-cache
 saved_logs
 repos
-node_modules
 .env
-d_*.log

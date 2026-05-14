@@ -44,6 +44,7 @@ pub const Config = struct {
     }
 };
 
+io: std.Io,
 allocator: std.mem.Allocator,
 mode: *Mode,
 config: *const Config,
@@ -53,28 +54,36 @@ cycle: usize = 0,
 client: Client,
 rand: std.Random.DefaultPrng,
 pending_request_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty,
-text_document: lsp.types.TextDocumentItem,
+text_document: lsp.types.TextDocument,
 
 pub fn init(
+    io: std.Io,
     allocator: std.mem.Allocator,
+    environ_map: *const std.process.Environ.Map,
     mode: *Mode,
     config: *const Config,
 ) !Fuzzer {
     var client: Client = try .init(
+        io,
         allocator,
+        environ_map,
         config.zls_path,
         config.zig_env.zig_exe,
-        if (config.seed != null) .Inherit else .Ignore,
+        if (config.seed != null) .inherit else .ignore,
     );
-    errdefer _ = client.child_process.kill() catch @panic("failed to kill ZLS process");
+    errdefer client.child_process.kill(io);
 
-    const seed = config.seed orelse std.crypto.random.int(u64);
+    const rng_impl: std.Random.IoSource = .{ .io = io };
+    const rng = rng_impl.interface();
+
+    const seed = config.seed orelse rng.int(u64);
 
     var pending_request_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty;
     try pending_request_ids.ensureTotalCapacity(allocator, config.cycles_per_gen);
     errdefer pending_request_ids.deinit(allocator);
 
     return .{
+        .io = io,
         .allocator = allocator,
         .mode = mode,
         .config = config,
@@ -85,7 +94,7 @@ pub fn init(
         .pending_request_ids = pending_request_ids,
         .text_document = .{
             .uri = client.text_document_uri,
-            .languageId = "zig",
+            .languageId = .{ .custom_value = "zig" },
             .version = 0,
             .text = "",
         },
@@ -104,6 +113,7 @@ pub fn fuzz(fuzzer: *Fuzzer) (lsp.Transport.WriteError || lsp.Transport.ReadErro
 
     if (fuzzer.cycle % fuzzer.config.cycles_per_gen == 0) {
         try utils.waitForResponseToRequests(
+            fuzzer.io,
             fuzzer.allocator,
             &fuzzer.client.stdio_transport.transport,
             &fuzzer.pending_request_ids,
@@ -120,13 +130,14 @@ pub fn fuzz(fuzzer: *Fuzzer) (lsp.Transport.WriteError || lsp.Transport.ReadErro
 
         fuzzer.text_document.version += 1;
         try fuzzer.client.transport().writeNotification(
+            fuzzer.io,
             fuzzer.allocator,
             "textDocument/didChange",
-            lsp.types.DidChangeTextDocumentParams,
+            lsp.types.TextDocument.DidChangeParams,
             .{
                 .textDocument = .{ .uri = fuzzer.text_document.uri, .version = fuzzer.text_document.version },
-                .contentChanges = &[1]lsp.types.TextDocumentContentChangeEvent{
-                    .{ .literal_1 = .{ .text = fuzzer.text_document.text } },
+                .contentChanges = &[1]lsp.types.TextDocument.ContentChangeEvent{
+                    .{ .text_document_content_change_whole_document = .{ .text = fuzzer.text_document.text } },
                 },
             },
             .{ .emit_null_optional_fields = false },
@@ -134,8 +145,9 @@ pub fn fuzz(fuzzer: *Fuzzer) (lsp.Transport.WriteError || lsp.Transport.ReadErro
     }
 
     const id, const json_message = try utils.fuzzFeatureRandom(
-        fuzzer.client.transport(),
+        fuzzer.io,
         fuzzer.allocator,
+        fuzzer.client.transport(),
         fuzzer.text_document,
         fuzzer.rand.random(),
     );

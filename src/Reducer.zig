@@ -8,19 +8,23 @@ const Client = @import("Client.zig");
 const lsp = @import("lsp");
 
 pub fn reduce(
+    io: std.Io,
     allocator: std.mem.Allocator,
+    environ_map: *const std.process.Environ.Map,
     mode: *Mode,
     config: *const Fuzzer.Config,
     seed: u64,
     progress_node: std.Progress.Node,
 ) !void {
     var client: Client = try .init(
+        io,
         allocator,
+        environ_map,
         config.zls_path,
         config.zig_env.zig_exe,
-        .Pipe,
+        .pipe,
     );
-    errdefer _ = client.child_process.kill() catch @panic("failed to kill ZLS process");
+    errdefer client.child_process.kill(io);
 
     try client.initialize();
 
@@ -29,6 +33,7 @@ pub fn reduce(
 
     var keep_running_stderr: std.atomic.Value(bool) = .init(true);
     const stderr_thread: std.Thread = try .spawn(.{}, readStderr, .{
+        io,
         allocator,
         client.child_process.stderr.?,
         &stderr,
@@ -40,9 +45,9 @@ pub fn reduce(
     }
 
     var rand: std.Random.DefaultPrng = .init(seed);
-    var text_document: lsp.types.TextDocumentItem = .{
+    var text_document: lsp.types.TextDocument = .{
         .uri = client.text_document_uri,
-        .languageId = "zig",
+        .languageId = .{ .custom_value = "zig" },
         .version = 0,
         .text = "",
     };
@@ -62,13 +67,14 @@ pub fn reduce(
 
             text_document.version += 1;
             try client.transport().writeNotification(
+                io,
                 allocator,
                 "textDocument/didChange",
-                lsp.types.DidChangeTextDocumentParams,
+                lsp.types.TextDocument.DidChangeParams,
                 .{
                     .textDocument = .{ .uri = text_document.uri, .version = text_document.version },
-                    .contentChanges = &[1]lsp.types.TextDocumentContentChangeEvent{
-                        .{ .literal_1 = .{ .text = text_document.text } },
+                    .contentChanges = &[1]lsp.types.TextDocument.ContentChangeEvent{
+                        .{ .text_document_content_change_whole_document = .{ .text = text_document.text } },
                     },
                 },
                 .{ .emit_null_optional_fields = false },
@@ -76,14 +82,15 @@ pub fn reduce(
         }
 
         const id, const json_message = try utils.fuzzFeatureRandom(
-            client.transport(),
+            io,
             allocator,
+            client.transport(),
             text_document,
             rand.random(),
         );
         errdefer allocator.free(json_message);
 
-        utils.waitForResponseToRequest(client.allocator, client.transport(), id) catch |err| switch (err) {
+        utils.waitForResponseToRequest(io, allocator, client.transport(), id) catch |err| switch (err) {
             error.EndOfStream => break json_message,
             else => |e| return e,
         };
@@ -98,6 +105,8 @@ pub fn reduce(
     else
         stderr.items;
 
+    const now: std.Io.Timestamp = .now(io, .awake);
+
     if (config.rpc) {
         var data = [_][]const u8{
             std.mem.asBytes(&@as(u32, @intCast(
@@ -109,7 +118,7 @@ pub fn reduce(
                     2 + processed_stderr.len,
             ))),
 
-            std.mem.asBytes(&std.time.milliTimestamp()),
+            std.mem.asBytes(&now.toMilliseconds()),
 
             std.mem.asBytes(&@as(u8, @intCast(config.zig_env.version.len))),
             config.zig_env.version,
@@ -127,22 +136,22 @@ pub fn reduce(
             processed_stderr,
         };
 
-        var file_writer = std.fs.File.stdout().writer(&.{});
+        var file_writer = std.Io.File.stdout().writer(io, &.{});
         try file_writer.interface.writeVecAll(&data);
     } else {
-        var logs_dir = try std.fs.cwd().makeOpenPath("saved_logs", .{});
-        defer logs_dir.close();
+        var logs_dir = try std.Io.Dir.cwd().createDirPathOpen(io, "saved_logs", .{});
+        defer logs_dir.close(io);
 
         const file_name = std.fmt.hex(seed) ++ ".md";
-        const entry_file = try logs_dir.createFile(file_name, .{});
-        defer entry_file.close();
+        const entry_file = try logs_dir.createFile(io, file_name, .{});
+        defer entry_file.close(io);
 
-        var file_writer = entry_file.writer(&.{});
+        var file_writer = entry_file.writer(io, &.{});
 
         var timestamp_buf: [32]u8 = undefined;
         var data = [_][]const u8{
             "timestamp: ",
-            try std.fmt.bufPrint(&timestamp_buf, "{d}", .{std.time.milliTimestamp()}),
+            try std.fmt.bufPrint(&timestamp_buf, "{d}", .{now}),
             "\n",
             "zig version: ",
             config.zig_env.version,
@@ -164,14 +173,17 @@ pub fn reduce(
 }
 
 fn readStderr(
+    io: std.Io,
     allocator: std.mem.Allocator,
-    stderr: std.fs.File,
+    stderr: std.Io.File,
     out: *std.ArrayList(u8),
     keep_running: *std.atomic.Value(bool),
 ) void {
     var buffer: [4096]u8 = undefined;
+    var reader = stderr.reader(io, &buffer);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, out);
+    defer aw.deinit();
     while (keep_running.load(.acquire)) {
-        const amt = stderr.read(&buffer) catch break;
-        out.appendSlice(allocator, buffer[0..amt]) catch break;
+        _ = reader.interface.streamRemaining(&aw.writer) catch break;
     }
 }
