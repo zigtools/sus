@@ -53,7 +53,7 @@ seed: u64,
 cycle: usize = 0,
 client: Client,
 rand: std.Random.DefaultPrng,
-pending_request_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty,
+pending_request_ids: std.array_hash_map.Auto(i64, void) = .empty,
 text_document: lsp.types.TextDocument,
 
 pub fn init(
@@ -78,7 +78,7 @@ pub fn init(
 
     const seed = config.seed orelse rng.int(u64);
 
-    var pending_request_ids: std.AutoArrayHashMapUnmanaged(i64, void) = .empty;
+    var pending_request_ids: std.array_hash_map.Auto(i64, void) = .empty;
     try pending_request_ids.ensureTotalCapacity(allocator, config.cycles_per_gen);
     errdefer pending_request_ids.deinit(allocator);
 

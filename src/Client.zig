@@ -43,7 +43,7 @@ pub fn init(
     });
     errdefer child_process.kill(io);
 
-    const text_document_uri = try std.fmt.allocPrint(allocator, "{f}", .{std.Uri{
+    const text_document_uri = try allocator.print("{f}", .{std.Uri{
         .scheme = "untitled",
         .path = .{ .raw = "principal.zig" },
     }});

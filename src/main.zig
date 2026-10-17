@@ -20,7 +20,7 @@ fn loadEnv(
 
     var line_it = std.mem.splitAny(u8, env_content, "\n\r");
     while (line_it.next()) |line| {
-        if (std.mem.indexOfScalar(u8, line, '=')) |equal_sign_index| {
+        if (std.mem.findScalar(u8, line, '=')) |equal_sign_index| {
             const key = line[0..equal_sign_index];
             const val = line[equal_sign_index + 1 ..];
             try envmap.put(key, val);
@@ -74,7 +74,7 @@ fn initConfig(
             } else {
                 std.log.warn(
                     "expected mode name (one of {f}) in env option 'mode' but got '{s}'",
-                    .{ std.json.fmt(std.meta.fieldNames(ModeName).*, .{}), mode_name },
+                    .{ std.json.fmt(@typeInfo(ModeName).@"enum".field_names, .{}), mode_name },
                 );
             }
         }
@@ -148,9 +148,8 @@ fn initConfig(
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
-        switch (result.term) {
-            .exited => |code| if (code != 0) fatal("command '{s} --version' exited with non zero exit code: {d}", .{ zls_path, code }),
-            else => fatal("command '{s} --version' exited abnormally: {s}", .{ zls_path, @tagName(result.term) }),
+        if (!result.term.success()) {
+            fatal("command '{s} --version' {f}", .{ zls_path, result.term });
         }
 
         break :blk try allocator.dupe(u8, std.mem.trim(u8, result.stdout, &std.ascii.whitespace));
@@ -169,9 +168,8 @@ fn initConfig(
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
-        switch (result.term) {
-            .exited => |code| if (code != 0) fatal("command '{s} env' exited with non zero exit code: {d}", .{ zig_path, code }),
-            else => fatal("command '{s} env' exited abnormally: {s}", .{ zig_path, @tagName(result.term) }),
+        if (!result.term.success()) {
+            fatal("command '{s} env' {f}", .{ zig_path, result.term });
         }
 
         if (std.mem.startsWith(u8, result.stdout, "{")) {
@@ -197,17 +195,17 @@ fn initConfig(
                 , .{ zig_path, result.stdout, result.stderr, diagnostics.getLine(), diagnostics.getColumn(), err });
             };
         } else {
-            const stdout = try allocator.dupeZ(u8, result.stdout);
+            const stdout = try allocator.dupeSentinel(u8, result.stdout, 0);
             defer allocator.free(stdout);
 
-            var diagnostics: std.zon.parse.Diagnostics = .{};
-            break :blk std.zon.parse.fromSliceAlloc(
-                Fuzzer.Config.ZigEnv,
-                zig_env_arena.allocator(),
-                stdout,
-                &diagnostics,
-                .{ .ignore_unknown_fields = true },
-            ) catch {
+            var diagnostics: std.zon.parse.Diagnostics = undefined;
+            break :blk std.zon.parse.fromSlice(Fuzzer.Config.ZigEnv, .{
+                .arena = zig_env_arena.allocator(),
+                .diagnostics = &diagnostics,
+                .gpa = allocator,
+                .source = stdout,
+                .ignore_unknown_fields = true,
+            }) catch {
                 fatal(
                     \\command '{s} env' did not respond with valid json or zon
                     \\stdout:
@@ -215,7 +213,7 @@ fn initConfig(
                     \\stderr:
                     \\{s}
                     \\{f}
-                , .{ zig_path, result.stdout, result.stderr, diagnostics });
+                , .{ zig_path, result.stdout, result.stderr, diagnostics.fmt("zig env") });
             };
         }
     };
@@ -255,7 +253,7 @@ const usage = std.fmt.comptimePrint(
     \\For a listing of build options, use 'zig build --help'.
     \\
 , .{
-    std.json.fmt(std.meta.fieldNames(ModeName).*, .{}),
+    std.json.fmt(@typeInfo(ModeName).@"enum".field_names, .{}),
     Fuzzer.Config.Defaults.rpc,
     Fuzzer.Config.Defaults.cycles_per_gen,
 });
@@ -338,7 +336,7 @@ pub fn main(init: std.process.Init) !void {
     var env_map: std.process.Environ.Map = loadEnv(io, gpa, init.environ_map) catch .init(gpa);
     defer env_map.deinit();
 
-    var arg_it = init.minimal.args.iterate();
+    var arg_it = try init.minimal.args.iterateAllocator(gpa);
     defer arg_it.deinit();
 
     var config = try initConfig(io, gpa, &env_map, &arg_it);

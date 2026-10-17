@@ -58,7 +58,7 @@ pub fn waitForResponseToRequests(
     io: std.Io,
     allocator: std.mem.Allocator,
     transport: *lsp.Transport,
-    ids: *std.AutoArrayHashMapUnmanaged(i64, void),
+    ids: *std.array_hash_map.Auto(i64, void),
 ) !void {
     while (ids.count() != 0) {
         const json_message = try transport.readJsonMessage(io, allocator);

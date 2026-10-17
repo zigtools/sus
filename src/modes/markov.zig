@@ -18,7 +18,7 @@ pub fn Iterator(comptime byte_len: comptime_int) type {
         /// byte length
         pub const len = byte_len;
         pub const Block = [len]u8;
-        pub const Int = std.meta.Int(.unsigned, len * 8);
+        pub const Int = @Int(.unsigned, len * 8);
         pub const IntAndNext = struct { int: Int, next: u8 };
         const Self = @This();
         pub fn next(it: *Self) ?IntAndNext {
@@ -159,7 +159,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         allocator: mem.Allocator,
 
         pub const Iter = Iterator(byte_len);
-        pub const Table = std.AutoArrayHashMapUnmanaged(Iter.Block, Follows);
+        pub const Table = std.array_hash_map.Auto(Iter.Block, Follows);
         const Self = @This();
 
         pub fn deinit(self: *Self, allocator: mem.Allocator) void {

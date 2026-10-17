@@ -100,7 +100,7 @@ pub fn reduce(
     };
     defer allocator.free(json_message);
 
-    const processed_stderr = if (std.mem.indexOf(u8, stderr.items, "panic:")) |panic_start|
+    const processed_stderr = if (std.mem.find(u8, stderr.items, "panic:")) |panic_start|
         stderr.items[panic_start..]
     else
         stderr.items;
@@ -151,7 +151,7 @@ pub fn reduce(
         var timestamp_buf: [32]u8 = undefined;
         var data = [_][]const u8{
             "timestamp: ",
-            try std.fmt.bufPrint(&timestamp_buf, "{d}", .{now}),
+            try std.mem.print(&timestamp_buf, "{d}", .{now}),
             "\n",
             "zig version: ",
             config.zig_env.version,
