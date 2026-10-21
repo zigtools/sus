@@ -31,18 +31,13 @@ pub fn reduce(
     var stderr: std.ArrayList(u8) = .empty;
     defer stderr.deinit(allocator);
 
-    var keep_running_stderr: std.atomic.Value(bool) = .init(true);
-    const stderr_thread: std.Thread = try .spawn(.{}, readStderr, .{
+    var stderr_task = try io.concurrent(readStderr, .{
         io,
         allocator,
         client.child_process.stderr.?,
         &stderr,
-        &keep_running_stderr,
     });
-    defer {
-        keep_running_stderr.store(false, .release);
-        stderr_thread.join();
-    }
+    defer stderr_task.cancel(io);
 
     var rand: std.Random.DefaultPrng = .init(seed);
     var text_document: lsp.types.TextDocument = .{
@@ -99,6 +94,8 @@ pub fn reduce(
         return;
     };
     defer allocator.free(json_message);
+
+    stderr_task.await(io);
 
     const processed_stderr = if (std.mem.find(u8, stderr.items, "panic:")) |panic_start|
         stderr.items[panic_start..]
@@ -177,13 +174,10 @@ fn readStderr(
     allocator: std.mem.Allocator,
     stderr: std.Io.File,
     out: *std.ArrayList(u8),
-    keep_running: *std.atomic.Value(bool),
 ) void {
     var buffer: [4096]u8 = undefined;
     var reader = stderr.reader(io, &buffer);
-    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, out);
-    defer aw.deinit();
-    while (keep_running.load(.acquire)) {
-        _ = reader.interface.streamRemaining(&aw.writer) catch break;
-    }
+    reader.interface.appendRemaining(allocator, out, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory, error.ReadFailed, error.StreamTooLong => return,
+    };
 }
