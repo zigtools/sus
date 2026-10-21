@@ -139,7 +139,9 @@ pub fn reduce(
         var logs_dir = try std.Io.Dir.cwd().createDirPathOpen(io, "saved_logs", .{});
         defer logs_dir.close(io);
 
-        const file_name = std.fmt.hex(seed) ++ ".md";
+        var file_name_buffer: [16 + ".md".len]u8 = undefined;
+        const file_name = std.mem.print(&file_name_buffer, "{x}.md", .{seed}) catch unreachable;
+        std.debug.assert(file_name.len == file_name_buffer.len);
         const entry_file = try logs_dir.createFile(io, file_name, .{});
         defer entry_file.close(io);
 

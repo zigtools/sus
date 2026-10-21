@@ -103,7 +103,7 @@ fn initConfig(
             rpc = true;
         } else if (std.mem.eql(u8, arg, "--seed")) {
             const next_arg = arg_it.next() orelse fatal("expected number after --seed", .{});
-            seed = std.fmt.parseUnsigned(u64, next_arg, 10) catch fatal("invalid unsigned integer '{s}'", .{next_arg});
+            seed = std.fmt.parseUnsigned(u64, next_arg, 0) catch fatal("invalid unsigned integer '{s}'", .{next_arg});
         } else if (std.mem.eql(u8, arg, "--zls-path")) {
             if (maybe_zls_path) |path| {
                 allocator.free(path);
@@ -385,7 +385,7 @@ pub fn main(init: std.process.Init) !void {
                 progress_node.completeOne();
             } else |err| {
                 try fuzzer.client.wait();
-                std.log.info("Reducing {} [seed={d}]...", .{ err, fuzzer.seed });
+                std.log.info("Reducing {} [seed=0x{x}]...", .{ err, fuzzer.seed });
                 // if (config.seed != null) return;
 
                 const progress_node_reduce = progress_node.start("reducing", fuzzer.cycle);
@@ -402,16 +402,15 @@ pub fn main(init: std.process.Init) !void {
                 break;
             }
         } else {
-            if (config.seed != null) {
-                std.log.info("Fuzzer running too long with no result. restarting...", .{});
-            }
-
             fuzzer.client.shutdown() catch |err| {
                 std.log.err("Failed to shutdown LSP Client: {}", .{err});
                 return err;
             };
             try fuzzer.client.wait();
-            if (config.seed != null) return;
+            if (config.seed != null) {
+                std.log.info("The given seed produced no crash", .{});
+                return;
+            }
         }
     }
 }
