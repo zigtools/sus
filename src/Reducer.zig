@@ -11,7 +11,7 @@ pub fn reduce(
     io: std.Io,
     allocator: std.mem.Allocator,
     environ_map: *const std.process.Environ.Map,
-    mode: *Mode,
+    mode: *const Mode,
     config: *const Fuzzer.Config,
     seed: u64,
     progress_node: std.Progress.Node,

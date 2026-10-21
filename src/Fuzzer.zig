@@ -46,7 +46,7 @@ pub const Config = struct {
 
 io: std.Io,
 allocator: std.mem.Allocator,
-mode: *Mode,
+mode: *const Mode,
 config: *const Config,
 seed: u64,
 
@@ -60,7 +60,7 @@ pub fn init(
     io: std.Io,
     allocator: std.mem.Allocator,
     environ_map: *const std.process.Environ.Map,
-    mode: *Mode,
+    mode: *const Mode,
     config: *const Config,
 ) !Fuzzer {
     var client: Client = try .init(

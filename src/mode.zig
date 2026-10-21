@@ -27,7 +27,7 @@ pub const Mode = union(enum) {
         mode.* = undefined;
     }
 
-    pub fn gen(mode: *Mode, allocator: std.mem.Allocator, random: std.Random) ![]const u8 {
+    pub fn gen(mode: *const Mode, allocator: std.mem.Allocator, random: std.Random) ![]const u8 {
         switch (mode.*) {
             inline else => |m| return try m.gen(allocator, random),
         }

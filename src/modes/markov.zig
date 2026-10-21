@@ -196,7 +196,7 @@ pub fn Model(comptime byte_len: comptime_int, comptime debug: bool) type {
         /// after using model.feed() and model.prep() this method can be used to generate pseudo random text based on the
         /// previous input to feed().
         pub fn gen(
-            self: *Self,
+            self: *const Self,
             random: std.Random,
             writer: *std.Io.Writer,
             options: GenOptions,

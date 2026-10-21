@@ -114,7 +114,7 @@ pub fn deinit(bb: *BestBehavior, allocator: std.mem.Allocator) void {
     bb.tests.deinit(allocator);
 }
 
-pub fn gen(bb: *BestBehavior, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
+pub fn gen(bb: *const BestBehavior, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
     const index = random.intRangeLessThan(usize, 0, bb.tests.items.len);
     const file_content = bb.tests.items[index];
 

@@ -135,7 +135,7 @@ pub fn deinit(mm: *Markov, allocator: std.mem.Allocator) void {
     allocator.destroy(mm);
 }
 
-pub fn gen(mm: *Markov, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
+pub fn gen(mm: *const Markov, allocator: std.mem.Allocator, random: std.Random) error{OutOfMemory}![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     mm.model.gen(random, &aw.writer, .{ .maxlen = mm.maxlen }) catch |err| switch (err) {
